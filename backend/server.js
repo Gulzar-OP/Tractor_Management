@@ -25,9 +25,7 @@ app.use(cookieParser());
 const allowURL = [
   "http://localhost:5173",
   "http://localhost:5174",
-  "https://smart-tractor.vercel.app",
-  "https://smart-tractor-git-main-gulzar-hussains-projects.vercel.app",
-  "https://smart-tractor-i5qkwsxso-gulzar-hussains-projects.vercel.app"
+  process.env.API_Frontend
 ];
 
 app.use(cors({
