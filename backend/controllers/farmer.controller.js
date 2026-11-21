@@ -15,7 +15,7 @@ export const createFarmer = async (req, res) => {
       totalPaidAmount,
       totalDueAmount,
     } = req.body;
-      console.log(req.user.userId);
+      // console.log(req.user.userId);
     if (!name) {
       return res.status(400).json({
         success: false,
@@ -37,6 +37,7 @@ export const createFarmer = async (req, res) => {
       totalPaidAmount: totalPaidAmount || 0,
       totalDueAmount: totalDueAmount || 0,
     });
+    // console.log("Farmer created:", farmer);
 
     return res.status(201).json({
       success: true,
@@ -86,10 +87,13 @@ export const allFarmers = async (req, res) => {
   try {
     let filter = {};
 
-    if (req.user.role === "owner") {
+    // if (req.user.role === "owner") {
+    //   filter.owner = req.user.ownerId;
+    // } else if (req.user.role === "driver") {
+    //   filter.createdBy = req.user.userId;
+    // }
+        if (req.user.role === "owner" || req.user.role === "driver") {
       filter.owner = req.user.ownerId;
-    } else if (req.user.role === "driver") {
-      filter.createdBy = req.user.userId;
     }
 
     const farmers = await Farmer.find(filter);

@@ -20,58 +20,60 @@ import { useState } from "react";
 import FarmerDetails from "./features/Farmer/FarmerDetails";
 import Login from "./auth/Login"
 import Register from "./auth/Register";
-import Auth from "./auth/Auth";
-import DriverLogin from './auth/DriverLogin'
+// import Auth from "./auth/Auth";
+// import DriverLogin from './auth/DriverLogin'
 import Drivers from "./features/drivers/Drivers";
-
+import Intro from './Home/Intro'
+import DateWiseReport from "./features/Reports/DateWiseReport";
+import Works from "./features/Works/Works";
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
+
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      <Sidebar 
-        mobileOpen={mobileOpen}
-        setMobileOpen={setMobileOpen} />
+    <Routes>
+      {/* Routes with NO sidebar/topbar */}
+      <Route path="/home" element={<Intro />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      {/* <Route path="/auth" element={<Auth />} /> */}
+      {/* <Route path="/login/driver" element={<DriverLogin />} /> */}
 
-      <div className="flex-1 flex flex-col">
-        <Topbar setMobileOpen={setMobileOpen}/>
+      {/* Routes WITH sidebar/topbar layout */}
+      <Route
+        path="/*"
+        element={
+          <div className="min-h-screen bg-slate-50 flex">
+            <Sidebar mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+            <div className="flex-1 flex flex-col">
+              <Topbar setMobileOpen={setMobileOpen} />
+              <main className="flex-1 p-4 sm:p-8 max-w-[1400px] w-full mx-auto">
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/farmers" element={<Farmers />} />
+                  <Route path="/farmers/addFarmer" element={<AddFarmer />} />
+                  <Route path="/farmers/due-summary" element={<DueSummary />} />
+                  <Route path="/farmers/:farmerId" element={<FarmerDetails />} />
 
-        <main className="flex-1 p-4 sm:p-8 max-w-[1400px] w-full mx-auto">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
+                  <Route path="/workRecords" element={<WorkRecords />} />
+                  <Route path="/workRecords/start" element={<StartWork />} />
+                  <Route path="/workRecords/add" element={<AddWork />} />
+                  <Route path="/workRecords/:id" element={<WorkRecordDetails />} />
+                  <Route path="/workRecords/work" element={<Works />} />
 
-            <Route path="/farmers" element={<Farmers />} />
-            <Route path="/farmers/addFarmer" element={<AddFarmer />} />
-            <Route path="/farmers/due-summary" element={<DueSummary />} />
+                  <Route path="/payments" element={<PaymentPage />} />
+                  <Route path="/payments/history" element={<PaymentHistory />} />
 
-            <Route path="/workRecords" element={<WorkRecords />} />
-            <Route path="/workRecords/start" element={<StartWork />} />
-            <Route path="/workRecords/add" element={<AddWork />} />
-            <Route
-              path="/workRecords/:id"
-              element={<WorkRecordDetails />}
-            />
-
-            <Route path="/payments" element={<PaymentPage />} />
-            <Route
-              path="/payments/history"
-              element={<PaymentHistory />}
-            />
-
-            <Route path="/expenses" element={<Expenses />} />
-            <Route path="/drivers" element={<Drivers />} />
-
-            <Route path="/reports" element={<Reports />} />
-
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/farmers/:farmerId" element={ <FarmerDetails />} />
-
-            <Route path="/login/owner" element={<Login />} />
-            <Route path="/register" element={<Register/>} />
-            <Route path="/auth" element={<Auth/>} />
-            <Route path="/login/driver" element={<DriverLogin />} />
-          </Routes>
-        </main>
-      </div>
-    </div>
+                  <Route path="/expenses" element={<Expenses />} />
+                  <Route path="/drivers" element={<Drivers />} />
+                  {/* <Route path="/reports" element={<Reports />} /> */}
+                  <Route path="/reports" element={<DateWiseReport />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Routes>
+              </main>
+            </div>
+          </div>
+        }
+      />
+    </Routes>
   );
 }

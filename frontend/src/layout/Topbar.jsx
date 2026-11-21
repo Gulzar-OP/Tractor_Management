@@ -51,7 +51,7 @@ export default function Topbar({ setMobileOpen, onSelectFarmer }) {
   const abortRef = useRef(null);
 
   const today = new Date().toLocaleDateString();
-  const role = user?.data.role; // "owner" | "driver"
+  const role = user?.role; // "owner" | "driver"
   const userData = user?.data || {};
   const ownerId = userData.owner || null;
 

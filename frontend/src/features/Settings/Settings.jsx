@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import PageHeader from "../../components/UI/PageHeader";
 import Card from "../../components/UI/Card";
@@ -14,97 +14,120 @@ import {
   Wallet,
 } from "lucide-react";
 import axios from "axios";
+import TractorDetailsForm from "../../components/TractorDetailsForm";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
-
 const API = `${API_BASE}/api`;
+
+// Server ka message mile to wahi dikhao, warna default
+const errMsg = (err, fallback) => err?.response?.data?.message || fallback;
 
 export default function Settings() {
   const [rates, setRates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [savingRates, setSavingRates] = useState(false);
   const [addingRate, setAddingRate] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [saved, setSaved] = useState("");
-  const [toastMessage, setToastMessage] = useState(""); // Separate state for toast
   const [error, setError] = useState("");
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [newType, setNewType] = useState("");
   const [newRate, setNewRate] = useState("");
 
+  const savedTimer = useRef(null);
+
   useEffect(() => {
     fetchRates();
+    return () => clearTimeout(savedTimer.current); // page chhodne par timer band
   }, []);
 
   async function fetchRates() {
     setLoading(true);
     setError("");
     try {
-      const res = await axios.get(`${API}/rate/rates`, {
-        withCredentials: true,
-      });
-      console.log(res);
+      const res = await axios.get(`${API}/rate/rates`, { withCredentials: true });
       setRates(res.data.rates || res.data.data || []);
     } catch (err) {
       console.error(err);
-      setError("Could not load rates. Please refresh.");
+      setError(errMsg(err, "Could not load rates. Please refresh."));
     } finally {
       setLoading(false);
     }
   }
 
+  // Typing ke dauran text hi rakho (taaki field khali karke naya number likh sako)
   function updateRate(i, val) {
-    const next = [...rates];
-    next[i] = { ...next[i], rate: Number(val) || 0 }; // Prevent NaN
-    setRates(next);
-  }
-
-  function removeRateLocally(i) {
-    setRates((prev) => prev.filter((_, idx) => idx !== i));
+    setRates((prev) => {
+      const next = [...prev];
+      next[i] = { ...next[i], rate: val };
+      return next;
+    });
   }
 
   function flashSaved(msg) {
     setSaved(msg);
-    setToastMessage(msg); // Set toast message
-    setTimeout(() => {
-      setSaved("");
-      setToastMessage(""); // Clear toast after delay
-    }, 1500);
+    clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(""), 2000);
   }
 
   async function saveRates() {
+    // Save se pehle har rate check karo
+    for (const r of rates) {
+      const n = Number(r.rate);
+      if (r.rate === "" || !Number.isFinite(n) || n < 0) {
+        setError(`"${r.type}" ka rate sahi daalo (0 ya usse zyada)`);
+        return;
+      }
+    }
+
     setSavingRates(true);
     setError("");
     try {
-      const res = await axios.put(`${API}/rate/rates`, { rates }, {
-        withCredentials: true,
-      });
+      // unit hamesha "hour": billing per hour ke hisaab se hoti hai
+      const payload = rates.map((r) => ({
+        type: r.type,
+        rate: Number(r.rate),
+        unit: "hour",
+      }));
+      const res = await axios.put(
+        `${API}/rate/rates`,
+        { rates: payload },
+        { withCredentials: true }
+      );
       if (res.data.rates) setRates(res.data.rates);
       flashSaved("Rates saved successfully");
     } catch (err) {
       console.error(err);
-      setError("Could not save rates. Try again.");
+      setError(errMsg(err, "Could not save rates. Try again."));
     } finally {
       setSavingRates(false);
     }
   }
 
   async function addNewRate() {
-    if (!newType.trim()) {
+    const type = newType.trim();
+    if (!type) {
       setError("Please enter a work type name");
       return;
     }
-    const rateNum = Number(newRate) || 0;
+    const rateNum = newRate === "" ? NaN : Number(newRate);
+    if (!Number.isFinite(rateNum) || rateNum < 0) {
+      setError("Please enter a valid rate");
+      return;
+    }
 
     setAddingRate(true);
     setError("");
     try {
       const res = await axios.post(
         `${API}/rate`,
-        { type: newType.trim(), rate: rateNum },
+        { type, rate: rateNum, unit: "hour" },
         { withCredentials: true }
       );
-      const created = res.data.rate || res.data.data || { type: newType.trim(), rate: rateNum };
+      // addRates ka response `workRate` me aata hai
+      const created =
+        res.data.workRate || res.data.rate || res.data.data || { type, rate: rateNum };
 
       setRates((prev) => [...prev, created]);
       setNewType("");
@@ -113,15 +136,42 @@ export default function Settings() {
       flashSaved("New work type added");
     } catch (err) {
       console.error(err);
-      setError("Could not add work type. Try again.");
+      setError(errMsg(err, "Could not add work type. Try again."));
     } finally {
       setAddingRate(false);
     }
   }
 
+  // Pehle sirf screen se hat-ta tha, DB se nahi. Ab sach me delete hota hai.
+  async function deleteRate(i) {
+    const r = rates[i];
+    if (!window.confirm(`"${r.type}" delete karna hai? Purane kaam ke records par asar nahi padega.`)) {
+      return;
+    }
+
+    // _id nahi hai to ye abhi tak save hi nahi hua, bas list se hata do
+    if (!r._id) {
+      setRates((prev) => prev.filter((_, idx) => idx !== i));
+      return;
+    }
+
+    setDeletingId(r._id);
+    setError("");
+    try {
+      await axios.delete(`${API}/rate/${r._id}`, { withCredentials: true });
+      setRates((prev) => prev.filter((x) => x._id !== r._id));
+      flashSaved("Work type delete ho gaya");
+    } catch (err) {
+      console.error(err);
+      setError(errMsg(err, "Could not delete work type. Try again."));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const totalRates = rates.length;
   const avgRate = totalRates
-    ? Math.round(rates.reduce((sum, r) => sum + Number(r.rate || 0), 0) / totalRates)
+    ? Math.round(rates.reduce((sum, r) => sum + (Number(r.rate) || 0), 0) / totalRates)
     : 0;
 
   if (loading) {
@@ -134,7 +184,7 @@ export default function Settings() {
 
   return (
     <div className="max-w-3xl">
-      <PageHeader title="Settings" subtitle="Manage your default work rates" />
+      <PageHeader title="Settings" subtitle="Manage your tractor details and default work rates" />
 
       <AnimatePresence>
         {error && (
@@ -143,14 +193,24 @@ export default function Settings() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             className="mb-4 px-4 py-2.5 rounded-xl bg-red-50 border border-red-100 text-red-600 text-sm flex items-center justify-between"
+            role="alert"
           >
             <span>{error}</span>
-            <button onClick={() => setError("")} className="text-red-400 hover:text-red-600">
+            <button
+              onClick={() => setError("")}
+              aria-label="Error band karo"
+              className="text-red-400 hover:text-red-600"
+            >
               <X size={14} />
             </button>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Tractor ki detail (sidebar ke Tractor Status me dikhti hai) */}
+      <div className="mb-6">
+        <TractorDetailsForm />
+      </div>
 
       {/* Work Rates */}
       <Card className="p-6 overflow-hidden relative">
@@ -181,7 +241,7 @@ export default function Settings() {
         </div>
 
         {totalRates > 0 && (
-          <div className="relative flex gap-3 mt-4 mb-5">
+          <div className="relative flex flex-wrap gap-3 mt-4 mb-5">
             <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-100">
               <ClipboardList size={14} className="text-green-600" />
               <span className="text-xs text-slate-500">
@@ -216,6 +276,7 @@ export default function Settings() {
                     onChange={(e) => setNewType(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addNewRate()}
                     placeholder="e.g. Rotavator, Harvesting..."
+                    maxLength={50}
                     className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-green-200 focus:border-green-400"
                   />
                   <div className="relative w-full sm:w-40">
@@ -224,6 +285,8 @@ export default function Settings() {
                     </span>
                     <input
                       type="number"
+                      min="0"
+                      inputMode="decimal"
                       value={newRate}
                       onChange={(e) => setNewRate(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && addNewRate()}
@@ -267,7 +330,7 @@ export default function Settings() {
             <AnimatePresence initial={false}>
               {rates.map((r, i) => (
                 <motion.div
-                  key={r._id || r.type || i} // Better key handling
+                  key={r._id || r.type}
                   layout
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -280,30 +343,40 @@ export default function Settings() {
                     paddingBottom: 0,
                   }}
                   transition={{ duration: 0.2, delay: i * 0.03 }}
-                  className="group flex items-center gap-4 p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100/80 hover:shadow-sm transition-all overflow-hidden"
+                  className="group flex items-center gap-3 sm:gap-4 p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100/80 hover:shadow-sm transition-all overflow-hidden"
                 >
                   <div className="w-9 h-9 rounded-xl bg-white shadow-sm flex items-center justify-center text-green-600 shrink-0">
                     <ClipboardList size={16} />
                   </div>
                   <span className="font-medium text-slate-700 flex-1 truncate">{r.type}</span>
-                  <div className="relative w-36 shrink-0">
+                  <div className="relative w-28 sm:w-36 shrink-0">
                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
                       ₹
                     </span>
                     <input
                       type="number"
+                      min="0"
+                      inputMode="decimal"
                       value={r.rate}
                       onChange={(e) => updateRate(i, e.target.value)}
+                      aria-label={`${r.type} ka rate`}
                       className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-green-200 focus:border-green-400"
                     />
                   </div>
-                  <span className="text-xs text-slate-400 w-10 shrink-0">/hour</span>
+                  <span className="hidden sm:block text-xs text-slate-400 w-10 shrink-0">/hour</span>
+                  {/* Mobile pe hover nahi hota, isliye wahan hamesha dikhta hai */}
                   <button
-                    onClick={() => removeRateLocally(i)}
-                    title="Remove from list (save to apply)"
-                    className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all shrink-0"
+                    onClick={() => deleteRate(i)}
+                    disabled={deletingId === r._id}
+                    title="Delete work type"
+                    aria-label={`${r.type} delete karo`}
+                    className="sm:opacity-0 sm:group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all shrink-0 disabled:opacity-50"
                   >
-                    <Trash2 size={15} />
+                    {deletingId === r._id ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={15} />
+                    )}
                   </button>
                 </motion.div>
               ))}
@@ -331,16 +404,17 @@ export default function Settings() {
       </Card>
 
       <AnimatePresence>
-        {toastMessage && (
+        {saved && (
           <motion.div
             initial={{ opacity: 0, y: 20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.9 }}
             transition={{ type: "spring", stiffness: 400, damping: 25 }}
             className="toast fixed bottom-8 right-8 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-2"
+            role="status"
           >
             <CheckCircle2 size={16} className="text-green-400" />
-            {toastMessage}
+            {saved}
           </motion.div>
         )}
       </AnimatePresence>

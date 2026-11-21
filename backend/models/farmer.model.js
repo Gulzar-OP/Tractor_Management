@@ -1,16 +1,16 @@
 import mongoose from "mongoose";
 
 const farmerSchema = new mongoose.Schema({
-      createdBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        required: true
-    },
-    owner: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        required: true
-    },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
+  owner: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
   name: { type: String, required: true },
   fatherName: { type: String },
   farmName: { type: String },

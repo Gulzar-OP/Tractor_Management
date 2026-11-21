@@ -20,7 +20,9 @@ export const addDriver = async (req, res) => {
       });
     }
 
-    const existing = await User.findOne({ email });
+    const existing = await User.findOne({
+      email: email.toLowerCase().trim(),
+    });
 
     if (existing) {
       return res.status(409).json({
@@ -32,8 +34,8 @@ export const addDriver = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const driver = await User.create({
-      name,
-      email,
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
       password: hashedPassword,
       phone,
       village,
@@ -41,14 +43,17 @@ export const addDriver = async (req, res) => {
       owner: req.ownerId,
     });
 
-    res.status(201).json({
+    const driverData = driver.toObject();
+    delete driverData.password;
+
+    return res.status(201).json({
       success: true,
       message: "Driver added successfully",
-      driver,
+      driver: driverData,
     });
 
   } catch (err) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: err.message,
     });

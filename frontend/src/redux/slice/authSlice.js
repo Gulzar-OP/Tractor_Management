@@ -8,38 +8,18 @@ export const getCurrentUser = createAsyncThunk(
   "auth/getCurrentUser",
   async (_, { rejectWithValue }) => {
     try {
-      // Try owner first
-      const ownerRes = await axios.get(`${API}/auth/me`, {
+      const res = await axios.get(`${API}/auth/me`, {
         withCredentials: true,
       });
-      const ownerData = ownerRes.data?.user || ownerRes.data;
-      if (ownerData) {
-        return {
-          role: "owner",
-          data: ownerData,
-        };
-      }
-    } catch {
-      // ignore, try driver
-    }
 
-    try {
-      // Try driver
-      const driverRes = await axios.get(`${API}/driver/me`, {
-        withCredentials: true,
-      });
-      const driverData = driverRes.data?.driver || driverRes.data;
-      if (driverData) {
-        return {
-          role: "driver",
-          data: driverData,
-        };
-      }
-    } catch {
-      // ignore
-    }
+      console.log("API RESPONSE:", res.data);
 
-    return rejectWithValue("No user found");
+      return res.data.user; // Direct user object return
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.message || "User not found"
+      );
+    }
   }
 );
 

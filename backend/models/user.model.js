@@ -38,6 +38,9 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    tractorModel: { type: String, trim: true, default: "" },
+tractorNumber: { type: String, trim: true, default: "" },
+currency: { type: String, default: "INR" },
   },
   { timestamps: true }
 );

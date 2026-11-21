@@ -25,8 +25,8 @@ import { inr } from "../../data/mockData";
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 
 const API = `${API_BASE}/api`;
-console.log(import.meta.env.VITE_API_BASE_URL);
-console.log(import.meta.env);
+// console.log(import.meta.env.VITE_API_BASE_URL);
+// console.log(import.meta.env);
 export default function Dashboard() {
   const navigate = useNavigate();
   const dispatch = useDispatch();
@@ -34,7 +34,7 @@ export default function Dashboard() {
   // Same auth shape used in Topbar: { role, data: {...} }
   const { user, loading: authLoading } = useSelector((state) => state.auth);
   const isLoggedIn = Boolean(user);
-
+// console.log("Dashboard user:", user);
   const [works, setWorks] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -175,7 +175,7 @@ export default function Dashboard() {
 
           <button
             type="button"
-            onClick={() => navigate("/auth")}
+            onClick={() => navigate("/login")}
             className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 active:scale-[0.98]"
           >
             <LogIn size={16} />

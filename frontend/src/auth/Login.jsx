@@ -1,19 +1,33 @@
 import axios from "axios";
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useDispatch } from "react-redux";
 import { motion, AnimatePresence } from "framer-motion";
-import { FaEnvelope, FaLock } from "react-icons/fa";
+import {
+  FaEnvelope,
+  FaLock,
+  FaEye,
+  FaEyeSlash,
+  FaTractor,
+  FaRupeeSign,
+  FaUsers,
+  FaExclamationCircle,
+} from "react-icons/fa";
 import { getCurrentUser } from "../redux/slice/authSlice";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
-console.log(API_BASE)
-
 const API = `${API_BASE}/api`;
+
+const features = [
+  { icon: FaUsers, text: "Kisan aur driver ka poora hisaab ek jagah" },
+  { icon: FaTractor, text: "Kaam start, pause aur stop, timer ke saath" },
+  { icon: FaRupeeSign, text: "Payment, baaki rakam aur kharcha track karo" },
+];
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
@@ -21,28 +35,24 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
+
     setLoading(true);
     setError("");
 
     try {
       await axios.post(
         `${API}/auth/login`,
-        { email, password },
+        { email: email.trim().toLowerCase(), password },
         { withCredentials: true }
       );
 
-      // The login call only sets the auth cookie — it doesn't put the user
-      // in Redux. Without this, every screen that reads `state.auth.user`
-      // (Topbar, Dashboard, Farmers...) stays stuck on "logged out" until
-      // something else happens to remount and re-fetch it, e.g. a refresh.
-      // Fetch and wait for it here so the store is populated before we
-      // navigate away.
+      // Login sirf cookie set karta hai. Redux me user daalne ke liye
+      // getCurrentUser ka wait karo, tabhi dashboard sahi dikhega.
       await dispatch(getCurrentUser()).unwrap();
 
       navigate("/");
     } catch (err) {
-      // unwrap() throws the rejectWithValue payload (a string) for a failed
-      // getCurrentUser; axios errors carry a response object instead.
       const message =
         err?.response?.data?.message ||
         (typeof err === "string" ? err : null) ||
@@ -54,110 +64,195 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, y: 50 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-        className="bg-white/20 backdrop-blur-xl shadow-2xl rounded-3xl p-8 max-w-md w-full border border-white/30"
-      >
-        <motion.h2
-          initial={{ scale: 0.9 }}
-          animate={{ scale: 1 }}
-          className="text-3xl font-bold text-white text-center mb-2"
-        >
-          Welcome Back
-        </motion.h2>
-        <p className="text-white/80 text-center mb-8">Sign in to your account</p>
+    <div className="min-h-screen grid lg:grid-cols-2 bg-slate-50">
+      {/* ---------- Left: brand panel (sirf desktop pe) ---------- */}
+      <div className="relative hidden lg:flex flex-col justify-between overflow-hidden bg-gradient-to-br from-green-700 via-green-600 to-emerald-500 p-12 text-white">
+        {/* decorative circles */}
+        <div className="absolute -top-24 -right-24 h-72 w-72 rounded-full bg-white/10" />
+        <div className="absolute -bottom-32 -left-20 h-96 w-96 rounded-full bg-white/10" />
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="relative flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/20 backdrop-blur">
+            <FaTractor className="text-2xl" />
+          </div>
+          <span className="text-xl font-semibold tracking-wide">
+            Tractor Manager
+          </span>
+        </div>
+
+        <div className="relative space-y-8">
           <motion.div
-            initial={{ x: -20, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="space-y-2"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
           >
-            <label htmlFor="email" className="text-white font-medium flex items-center gap-2">
-              <FaEnvelope className="text-sm" />
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-              className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all duration-300"
-              placeholder="Enter your email"
-            />
+            <h1 className="text-4xl font-bold leading-tight">
+              Apni kheti ka kaam,
+              <br />
+              ab hisaab ke saath.
+            </h1>
+            <p className="mt-3 max-w-md text-white/80">
+              Har ghante ka kaam, har rupaye ka hisaab, bina copy-pen ke.
+            </p>
           </motion.div>
 
-          <motion.div
-            initial={{ x: -20, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="space-y-2"
-          >
-            <label htmlFor="password" className="text-white font-medium flex items-center gap-2">
-              <FaLock className="text-sm" />
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all duration-300"
-              placeholder="Enter your password"
-            />
-          </motion.div>
-
-          <AnimatePresence>
-            {error && (
-              <motion.p
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="text-red-200 bg-red-500/20 p-3 rounded-xl text-sm"
+          <ul className="space-y-4">
+            {features.map(({ icon: Icon, text }, i) => (
+              <motion.li
+                key={text}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.2 + i * 0.1 }}
+                className="flex items-center gap-3"
               >
-                {error}
-              </motion.p>
-            )}
-          </AnimatePresence>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15">
+                  <Icon />
+                </span>
+                <span className="text-white/90">{text}</span>
+              </motion.li>
+            ))}
+          </ul>
+        </div>
 
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            disabled={loading}
-            type="submit"
-            className="w-full py-4 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {loading ? (
-              <>
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Signing in...
-              </>
-            ) : (
-              "Sign In"
-            )}
-          </motion.button>
-        </form>
+        <p className="relative text-sm text-white/60">
+          © {new Date().getFullYear()} Tractor Manager
+        </p>
+      </div>
 
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="text-white/70 text-center mt-6 text-sm"
+      {/* ---------- Right: form ---------- */}
+      <div className="flex items-center justify-center px-4 py-10 sm:px-8">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="w-full max-w-md"
         >
-          Don't have an account?{" "}
-          <a href="/register" className="text-indigo-200 hover:text-white font-medium underline">
-            Sign up
-          </a>
-        </motion.p>
-      </motion.div>
+          {/* mobile logo */}
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-green-600 text-white">
+              <FaTractor className="text-xl" />
+            </div>
+            <span className="text-lg font-semibold text-slate-800">
+              Tractor Manager
+            </span>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+            <h2 className="text-2xl font-semibold text-slate-800">
+              Wapas aao 👋
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Apne account me sign in karo
+            </p>
+
+            <form onSubmit={handleSubmit} className="mt-6 space-y-5" noValidate>
+              {/* Email */}
+              <div>
+                <label
+                  htmlFor="email"
+                  className="mb-1.5 block text-sm font-medium text-slate-700"
+                >
+                  Email
+                </label>
+                <div className="relative">
+                  <FaEnvelope className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-slate-400" />
+                  <input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                    placeholder="aap@example.com"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                  />
+                </div>
+              </div>
+
+              {/* Password */}
+              <div>
+                <label
+                  htmlFor="password"
+                  className="mb-1.5 block text-sm font-medium text-slate-700"
+                >
+                  Password
+                </label>
+                <div className="relative">
+                  <FaLock className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-slate-400" />
+                  <input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                    placeholder="Apna password daalo"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-12 text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-green-500 focus:bg-white focus:ring-4 focus:ring-green-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((s) => !s)}
+                    aria-label={showPassword ? "Password chhupao" : "Password dikhao"}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-400 transition hover:text-slate-600"
+                  >
+                    {showPassword ? <FaEyeSlash /> : <FaEye />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Error */}
+              <AnimatePresence>
+                {error && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden"
+                    role="alert"
+                  >
+                    <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600">
+                      <FaExclamationCircle className="mt-0.5 shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Submit */}
+              <motion.button
+                whileHover={{ scale: loading ? 1 : 1.01 }}
+                whileTap={{ scale: loading ? 1 : 0.98 }}
+                disabled={loading}
+                type="submit"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3.5 font-semibold text-white shadow-sm transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? (
+                  <>
+                    <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    Sign in ho raha hai...
+                  </>
+                ) : (
+                  "Sign In"
+                )}
+              </motion.button>
+            </form>
+
+            <p className="mt-6 text-center text-sm text-slate-500">
+              Account nahi hai?{" "}
+              <Link
+                to="/register"
+                className="font-medium text-green-600 hover:text-green-700 hover:underline"
+              >
+                Register karo
+              </Link>
+            </p>
+          </div>
+
+          <p className="mt-6 text-center text-xs text-slate-400">
+            Driver ho? Apne owner se account banwao.
+          </p>
+        </motion.div>
+      </div>
     </div>
   );
 }
