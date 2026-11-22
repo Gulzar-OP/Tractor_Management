@@ -21,6 +21,11 @@ const farmerSchema = new mongoose.Schema({
   totalBilledAmount: { type: Number, default: 0 },
   totalPaidAmount: { type: Number, default: 0 },
   totalDueAmount: { type: Number, default: 0 },
+  advanceAmount:{
+    type:Number,
+    default:0,
+    min:0,
+  },
   lastWorkDate: { type: Date },
   works: [
     {

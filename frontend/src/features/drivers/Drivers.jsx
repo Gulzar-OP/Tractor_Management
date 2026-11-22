@@ -61,6 +61,7 @@ export default function Drivers() {
       });
 
       const driverData = res.data?.drivers || res.data || [];
+      console.log("Fetched Drivers Response:", res.data);
 
       setDrivers(Array.isArray(driverData) ? driverData : []);
 

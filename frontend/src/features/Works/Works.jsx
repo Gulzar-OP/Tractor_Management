@@ -8,11 +8,9 @@ import {
   Square,
   Clock,
   IndianRupee,
-  Users,
   Tractor,
   Search,
   RefreshCw,
-  Calendar,
   User,
   Activity,
 } from "lucide-react";
@@ -21,8 +19,6 @@ const BASE_URL =
   import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 
 const API = `${BASE_URL}/api/work`;
-
-// Change these according to your actual farmer and work-rate routes
 const FARMER_API = `${BASE_URL}/api/farmer`;
 const WORK_RATE_API = `${BASE_URL}/api/rate`;
 
@@ -63,7 +59,6 @@ const getToday = () => new Date().toISOString().split("T")[0];
 
 const getFarmerName = (farmer) => {
   if (!farmer) return "Unknown Farmer";
-
   if (typeof farmer === "string") return farmer;
 
   return (
@@ -76,7 +71,6 @@ const getFarmerName = (farmer) => {
 
 const getRateName = (rate) => {
   if (!rate) return "";
-
   if (typeof rate === "string") return rate;
 
   return (
@@ -102,6 +96,7 @@ const getStatusColor = (status) => {
     case "PAUSED":
       return "bg-yellow-100 text-yellow-700";
 
+    case "STOPPED":
     case "COMPLETED":
       return "bg-blue-100 text-blue-700";
 
@@ -134,6 +129,18 @@ export default function Works() {
     workRate: "",
     date: getToday(),
   });
+
+  // --------------------------------------------------
+  // Selected Farmer
+  // --------------------------------------------------
+
+  const selectedFarmer = useMemo(() => {
+    return (
+      farmers.find(
+        (farmer) => farmer._id === timerForm.farmerId
+      ) || null
+    );
+  }, [farmers, timerForm.farmerId]);
 
   // --------------------------------------------------
   // Timer
@@ -195,13 +202,15 @@ export default function Works() {
         response.data.workHistory ||
         [];
 
-      setWorks(data);
+      const worksData = Array.isArray(data) ? data : [];
 
-      const runningWork = data.find(
+      setWorks(worksData);
+
+      const runningWork = worksData.find(
         (work) => normalizeStatus(work.status) === "RUNNING"
       );
 
-      const pausedWork = data.find(
+      const pausedWork = worksData.find(
         (work) => normalizeStatus(work.status) === "PAUSED"
       );
 
@@ -219,36 +228,35 @@ export default function Works() {
   // Fetch Farmers
   // --------------------------------------------------
 
-const fetchFarmers = async () => {
-  try {
-    const response = await axios.post(
-      `${FARMER_API}/all-farmer`,
-      {},
-      {
-        withCredentials: true,
-      }
-    );
+  const fetchFarmers = async () => {
+    try {
+      const response = await axios.post(
+        `${FARMER_API}/all-farmer`,
+        {},
+        {
+          withCredentials: true,
+        }
+      );
 
-    console.log("Farmer API Response:", response.data);
+      const data =
+        response.data.farmers ||
+        response.data.all ||
+        response.data.data ||
+        response.data;
 
-    const data =
-      response.data.farmers ||
-      response.data.all ||
-      response.data.data ||
-      response.data;
+      setFarmers(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error(
+        "Fetch farmers error:",
+        error.response?.data || error.message
+      );
 
-    setFarmers(Array.isArray(data) ? data : []);
-  } catch (error) {
-    console.error(
-      "Fetch farmers error:",
-      error.response?.data || error.message
-    );
+      toast.error(
+        error.response?.data?.message || "Failed to fetch farmers"
+      );
+    }
+  };
 
-    toast.error(
-      error.response?.data?.message || "Failed to fetch farmers"
-    );
-  }
-};
   // --------------------------------------------------
   // Fetch Work Rates
   // --------------------------------------------------
@@ -268,9 +276,6 @@ const fetchFarmers = async () => {
       setWorkRates(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error("Fetch work rates error:", error);
-
-      // If your work-rate route is different,
-      // change WORK_RATE_API above.
     }
   };
 
@@ -432,7 +437,7 @@ const fetchFarmers = async () => {
     if (!activeWork) return;
 
     const confirmStop = window.confirm(
-      "Are you sure you want to complete this work?"
+      "Are you sure you want to complete this work? Available farmer advance will be adjusted automatically."
     );
 
     if (!confirmStop) return;
@@ -454,7 +459,11 @@ const fetchFarmers = async () => {
 
       setActiveWork(null);
 
-      await fetchWorks();
+      // Refresh works AND farmers after completion.
+      await Promise.all([
+        fetchWorks(),
+        fetchFarmers(),
+      ]);
     } catch (error) {
       console.error("Stop work error:", error);
 
@@ -471,9 +480,13 @@ const fetchFarmers = async () => {
   // --------------------------------------------------
 
   const handleRefresh = async () => {
-    await fetchWorks();
+    await Promise.all([
+      fetchWorks(),
+      fetchFarmers(),
+      fetchWorkRates(),
+    ]);
 
-    toast.success("Works refreshed");
+    toast.success("Data refreshed");
   };
 
   // --------------------------------------------------
@@ -482,7 +495,6 @@ const fetchFarmers = async () => {
 
   const filteredWorks = works.filter((work) => {
     const status = normalizeStatus(work.status);
-
     const farmerName = getFarmerName(work.farmer);
 
     const searchText = [
@@ -499,7 +511,9 @@ const fetchFarmers = async () => {
     );
 
     const matchesFilter =
-      filter === "ALL" || status === filter;
+      filter === "ALL" ||
+      status === filter ||
+      (filter === "STOPPED" && status === "COMPLETED");
 
     return matchesSearch && matchesFilter;
   });
@@ -508,8 +522,10 @@ const fetchFarmers = async () => {
   // Statistics
   // --------------------------------------------------
 
-  const completedWorks = works.filter(
-    (work) => normalizeStatus(work.status) === "COMPLETED"
+  const completedWorks = works.filter((work) =>
+    ["STOPPED", "COMPLETED"].includes(
+      normalizeStatus(work.status)
+    )
   );
 
   const totalMinutes = works.reduce(
@@ -541,10 +557,7 @@ const fetchFarmers = async () => {
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <RefreshCw className="h-8 w-8 animate-spin text-green-600" />
-
-          <p className="text-gray-500">
-            Loading works...
-          </p>
+          <p className="text-gray-500">Loading works...</p>
         </div>
       </div>
     );
@@ -568,7 +581,8 @@ const fetchFarmers = async () => {
 
         <button
           onClick={handleRefresh}
-          className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium hover:bg-gray-50"
+          disabled={actionLoading}
+          className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
         >
           <RefreshCw size={16} />
           Refresh
@@ -614,9 +628,7 @@ const fetchFarmers = async () => {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 
         <div className="rounded-2xl border border-green-100 bg-green-50 p-5">
-          <p className="text-sm text-green-700">
-            Total Paid
-          </p>
+          <p className="text-sm text-green-700">Total Paid</p>
 
           <h2 className="mt-2 text-2xl font-bold text-green-800">
             {formatCurrency(totalPaid)}
@@ -624,9 +636,7 @@ const fetchFarmers = async () => {
         </div>
 
         <div className="rounded-2xl border border-red-100 bg-red-50 p-5">
-          <p className="text-sm text-red-700">
-            Total Due
-          </p>
+          <p className="text-sm text-red-700">Total Due</p>
 
           <h2 className="mt-2 text-2xl font-bold text-red-800">
             {formatCurrency(totalDue)}
@@ -641,7 +651,6 @@ const fetchFarmers = async () => {
         <div className="overflow-hidden rounded-2xl border border-green-200 bg-white shadow-sm">
 
           <div className="flex items-center justify-between border-b border-gray-100 bg-green-50 p-5">
-
             <div>
               <h2 className="text-lg font-semibold text-gray-900">
                 Active Work
@@ -660,7 +669,6 @@ const fetchFarmers = async () => {
             >
               {normalizeStatus(activeWork.status)}
             </span>
-
           </div>
 
           <div className="p-5">
@@ -668,30 +676,21 @@ const fetchFarmers = async () => {
             <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
 
               <div>
-                <p className="text-sm text-gray-500">
-                  Farmer
-                </p>
-
+                <p className="text-sm text-gray-500">Farmer</p>
                 <p className="mt-1 font-semibold text-gray-900">
                   {getFarmerName(activeWork.farmer)}
                 </p>
               </div>
 
               <div>
-                <p className="text-sm text-gray-500">
-                  Field
-                </p>
-
+                <p className="text-sm text-gray-500">Field</p>
                 <p className="mt-1 font-semibold text-gray-900">
                   {activeWork.fieldName || "-"}
                 </p>
               </div>
 
               <div>
-                <p className="text-sm text-gray-500">
-                  Work Type
-                </p>
-
+                <p className="text-sm text-gray-500">Work Type</p>
                 <p className="mt-1 font-semibold text-gray-900">
                   {activeWork.workType || "-"}
                 </p>
@@ -702,7 +701,6 @@ const fetchFarmers = async () => {
             {/* Timer */}
 
             <div className="my-8 rounded-2xl bg-gray-900 p-6 text-center text-white">
-
               <p className="text-sm text-gray-400">
                 Work Duration
               </p>
@@ -714,15 +712,13 @@ const fetchFarmers = async () => {
               <p className="text-sm text-gray-400">
                 Rate: {formatCurrency(activeWork.ratePerHour)} / hour
               </p>
-
             </div>
 
             {/* Controls */}
 
             <div className="flex flex-wrap justify-center gap-3">
 
-              {normalizeStatus(activeWork.status) ===
-                "RUNNING" && (
+              {normalizeStatus(activeWork.status) === "RUNNING" && (
                 <button
                   disabled={actionLoading}
                   onClick={handlePauseWork}
@@ -733,8 +729,7 @@ const fetchFarmers = async () => {
                 </button>
               )}
 
-              {normalizeStatus(activeWork.status) ===
-                "PAUSED" && (
+              {normalizeStatus(activeWork.status) === "PAUSED" && (
                 <button
                   disabled={actionLoading}
                   onClick={handleResumeWork}
@@ -751,7 +746,7 @@ const fetchFarmers = async () => {
                 className="flex items-center gap-2 rounded-xl bg-red-600 px-5 py-3 font-medium text-white hover:bg-red-700 disabled:opacity-50"
               >
                 <Square size={18} />
-                Complete Work
+                {actionLoading ? "Completing..." : "Complete Work"}
               </button>
 
             </div>
@@ -766,7 +761,6 @@ const fetchFarmers = async () => {
         <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
 
           <div className="border-b border-gray-100 p-5">
-
             <h2 className="text-lg font-semibold text-gray-900">
               Start New Work
             </h2>
@@ -774,7 +768,6 @@ const fetchFarmers = async () => {
             <p className="mt-1 text-sm text-gray-500">
               Select farmer and work details to start the timer
             </p>
-
           </div>
 
           <form
@@ -800,9 +793,7 @@ const fetchFarmers = async () => {
                 className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 outline-none focus:border-green-500"
                 required
               >
-                <option value="">
-                  Select Farmer
-                </option>
+                <option value="">Select Farmer</option>
 
                 {farmers.map((farmer) => (
                   <option
@@ -813,6 +804,38 @@ const fetchFarmers = async () => {
                   </option>
                 ))}
               </select>
+
+              {/* Selected Farmer Advance */}
+
+              {selectedFarmer && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800">
+                        Available Farmer Advance
+                      </p>
+
+                      <p className="mt-1 text-xs text-amber-700">
+                        This advance will be adjusted when work is completed.
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xl font-bold text-amber-900">
+                        {formatCurrency(
+                          selectedFarmer.advanceAmount || 0
+                        )}
+                      </p>
+
+                      <p className="text-xs text-amber-700">
+                        {getFarmerName(selectedFarmer)}
+                      </p>
+                    </div>
+                  </div>
+
+                </div>
+              )}
             </div>
 
             {/* Work Rate */}
@@ -833,9 +856,7 @@ const fetchFarmers = async () => {
                 className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 outline-none focus:border-green-500"
                 required
               >
-                <option value="">
-                  Select Work Rate
-                </option>
+                <option value="">Select Work Rate</option>
 
                 {workRates.map((rate) => (
                   <option
@@ -895,7 +916,6 @@ const fetchFarmers = async () => {
             {/* Start */}
 
             <div className="md:col-span-2">
-
               <button
                 type="submit"
                 disabled={actionLoading}
@@ -907,7 +927,6 @@ const fetchFarmers = async () => {
                   ? "Starting Work..."
                   : "Start Work Timer"}
               </button>
-
             </div>
 
           </form>
@@ -937,7 +956,6 @@ const fetchFarmers = async () => {
             {/* Search */}
 
             <div className="relative">
-
               <Search
                 size={18}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -950,7 +968,6 @@ const fetchFarmers = async () => {
                 placeholder="Search farmer or field..."
                 className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-4 outline-none focus:border-green-500 sm:w-64"
               />
-
             </div>
 
             {/* Filter */}
@@ -963,7 +980,8 @@ const fetchFarmers = async () => {
               <option value="ALL">All Works</option>
               <option value="RUNNING">Running</option>
               <option value="PAUSED">Paused</option>
-              <option value="COMPLETED">Completed</option>
+              <option value="STOPPED">Completed</option>
+              <option value="CANCELLED">Cancelled</option>
             </select>
 
           </div>
@@ -976,7 +994,6 @@ const fetchFarmers = async () => {
           <table className="w-full">
 
             <thead className="bg-gray-50">
-
               <tr>
                 <th className="px-5 py-4 text-left text-xs font-semibold uppercase text-gray-500">
                   Farmer
@@ -1007,10 +1024,17 @@ const fetchFarmers = async () => {
                 </th>
 
                 <th className="px-5 py-4 text-left text-xs font-semibold uppercase text-gray-500">
+                  Paid
+                </th>
+
+                <th className="px-5 py-4 text-left text-xs font-semibold uppercase text-gray-500">
+                  Due
+                </th>
+
+                <th className="px-5 py-4 text-left text-xs font-semibold uppercase text-gray-500">
                   Status
                 </th>
               </tr>
-
             </thead>
 
             <tbody className="divide-y divide-gray-100">
@@ -1023,7 +1047,6 @@ const fetchFarmers = async () => {
 
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
-
                       <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-green-700">
                         <User size={16} />
                       </div>
@@ -1031,7 +1054,6 @@ const fetchFarmers = async () => {
                       <span className="font-medium text-gray-900">
                         {getFarmerName(work.farmer)}
                       </span>
-
                     </div>
                   </td>
 
@@ -1061,16 +1083,24 @@ const fetchFarmers = async () => {
                     {formatCurrency(work.totalAmount)}
                   </td>
 
-                  <td className="px-5 py-4">
+                  <td className="px-5 py-4 text-sm font-medium text-green-700">
+                    {formatCurrency(work.paidAmount)}
+                  </td>
 
+                  <td className="px-5 py-4 text-sm font-medium text-red-600">
+                    {formatCurrency(work.dueAmount)}
+                  </td>
+
+                  <td className="px-5 py-4">
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusColor(
                         work.status
                       )}`}
                     >
-                      {normalizeStatus(work.status)}
+                      {normalizeStatus(work.status) === "STOPPED"
+                        ? "COMPLETED"
+                        : normalizeStatus(work.status)}
                     </span>
-
                   </td>
 
                 </tr>
@@ -1079,7 +1109,7 @@ const fetchFarmers = async () => {
               {filteredWorks.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={10}
                     className="px-5 py-12 text-center text-gray-500"
                   >
                     No works found
@@ -1090,7 +1120,6 @@ const fetchFarmers = async () => {
             </tbody>
 
           </table>
-
         </div>
 
         {/* Mobile Cards */}
@@ -1104,7 +1133,6 @@ const fetchFarmers = async () => {
             >
 
               <div className="flex items-start justify-between">
-
                 <div>
                   <h3 className="font-semibold text-gray-900">
                     {getFarmerName(work.farmer)}
@@ -1120,38 +1148,30 @@ const fetchFarmers = async () => {
                     work.status
                   )}`}
                 >
-                  {normalizeStatus(work.status)}
+                  {normalizeStatus(work.status) === "STOPPED"
+                    ? "COMPLETED"
+                    : normalizeStatus(work.status)}
                 </span>
-
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-4">
 
                 <div>
-                  <p className="text-xs text-gray-500">
-                    Work Type
-                  </p>
-
+                  <p className="text-xs text-gray-500">Work Type</p>
                   <p className="mt-1 text-sm font-medium">
                     {work.workType || "-"}
                   </p>
                 </div>
 
                 <div>
-                  <p className="text-xs text-gray-500">
-                    Date
-                  </p>
-
+                  <p className="text-xs text-gray-500">Date</p>
                   <p className="mt-1 text-sm font-medium">
                     {formatDate(work.date || work.startTime)}
                   </p>
                 </div>
 
                 <div>
-                  <p className="text-xs text-gray-500">
-                    Duration
-                  </p>
-
+                  <p className="text-xs text-gray-500">Duration</p>
                   <p className="mt-1 text-sm font-medium">
                     {formatDuration(
                       Number(work.totalMinutes || 0) * 60
@@ -1160,10 +1180,7 @@ const fetchFarmers = async () => {
                 </div>
 
                 <div>
-                  <p className="text-xs text-gray-500">
-                    Rate / Hour
-                  </p>
-
+                  <p className="text-xs text-gray-500">Rate / Hour</p>
                   <p className="mt-1 text-sm font-medium">
                     {formatCurrency(work.ratePerHour)}
                   </p>
@@ -1171,15 +1188,37 @@ const fetchFarmers = async () => {
 
               </div>
 
-              <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3">
+              <div className="mt-4 space-y-3 border-t border-gray-100 pt-3">
 
-                <span className="text-sm text-gray-500">
-                  Total Amount
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">
+                    Total Amount
+                  </span>
 
-                <span className="font-bold text-gray-900">
-                  {formatCurrency(work.totalAmount)}
-                </span>
+                  <span className="font-bold text-gray-900">
+                    {formatCurrency(work.totalAmount)}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">
+                    Paid Amount
+                  </span>
+
+                  <span className="font-semibold text-green-700">
+                    {formatCurrency(work.paidAmount)}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">
+                    Due Amount
+                  </span>
+
+                  <span className="font-semibold text-red-600">
+                    {formatCurrency(work.dueAmount)}
+                  </span>
+                </div>
 
               </div>
 
@@ -1214,7 +1253,6 @@ function StatCard({ title, value, icon, color }) {
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-
       <div className="flex items-center justify-between">
 
         <div>
@@ -1234,7 +1272,6 @@ function StatCard({ title, value, icon, color }) {
         </div>
 
       </div>
-
     </div>
   );
 }

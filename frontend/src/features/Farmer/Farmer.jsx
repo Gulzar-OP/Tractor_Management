@@ -1,3 +1,4 @@
+
 import React, {
   useEffect,
   useMemo,
@@ -10,7 +11,23 @@ import { useSelector } from "react-redux";
 import axios from "axios";
 import PageHeader from "../../components/UI/PageHeader";
 import Card from "../../components/UI/Card";
-import { Loader2, Mic, MicOff, X, LogIn, Sprout, MapPin, Phone, Clock, ChevronRight, Users } from "lucide-react";
+import {
+  Loader2,
+  Mic,
+  MicOff,
+  X,
+  LogIn,
+  Sprout,
+  MapPin,
+  Phone,
+  Clock,
+  ChevronRight,
+  Users,
+  Wallet,
+  IndianRupee,
+  RefreshCw,
+  TrendingUp,
+} from "lucide-react";
 import { HiOutlineMagnifyingGlass } from "react-icons/hi2";
 import { inr } from "../../data/mockData";
 import { FaRegTrashCan } from "react-icons/fa6";
@@ -18,10 +35,9 @@ import { FaRegTrashCan } from "react-icons/fa6";
 const PER_PAGE = 5;
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 const FARMERS_URL = `${API_BASE}/api/farmer/all-farmer`;
-const DELETE_FARMER_URL = (id) => `${API_BASE}/api/farmer/deleteFarmer/${id}`;
+const DELETE_FARMER_URL = (id) =>
+  `${API_BASE}/api/farmer/deleteFarmer/${id}`;
 
-// Deterministic soft gradient per farmer so avatars feel distinct but stable
-// across re-renders, matching the treatment used on the Due Summary page.
 const AVATAR_THEMES = [
   "from-emerald-500 to-teal-500",
   "from-amber-500 to-orange-500",
@@ -33,13 +49,19 @@ const AVATAR_THEMES = [
 
 function avatarTheme(seed = "") {
   let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+
   return AVATAR_THEMES[hash % AVATAR_THEMES.length];
 }
 
 function initials(name = "") {
   const parts = name.trim().split(/\s+/).filter(Boolean);
+
   if (parts.length === 0) return "?";
+
   return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
 }
 
@@ -55,11 +77,35 @@ function Avatar({ name, size = "h-10 w-10 text-sm" }) {
   );
 }
 
+function SummaryCard({ title, value, icon: Icon, color, description }) {
+  return (
+    <Card className="rounded-2xl border border-slate-200/80 p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-500">{title}</p>
+          <p className="mt-2 truncate text-xl font-bold text-slate-800 sm:text-2xl">
+            {value}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-400">{description}</p>
+        </div>
+
+        <div
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${color}`}
+        >
+          <Icon size={21} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function Farmers() {
   const navigate = useNavigate();
 
-  // Same auth shape used across the app: { role, data: {...} }
-  const { user, loading: authLoading } = useSelector((state) => state.auth);
+  const { user, loading: authLoading } = useSelector(
+    (state) => state.auth
+  );
+
   const isLoggedIn = Boolean(user);
 
   const [search, setSearch] = useState("");
@@ -73,8 +119,10 @@ export default function Farmers() {
 
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
+
   const recognitionRef = useRef(null);
 
+  // Voice search
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -84,15 +132,18 @@ export default function Farmers() {
     setSupported(true);
 
     const recognition = new SpeechRecognition();
+
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
     recognition.onresult = (event) => {
       let transcript = "";
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
       }
+
       setSearch(transcript);
       setPageNum(1);
     };
@@ -108,10 +159,11 @@ export default function Farmers() {
 
   const handleMicClick = () => {
     if (!recognitionRef.current) return;
+
     try {
       recognitionRef.current.start();
     } catch (err) {
-      console.error("Speech recognition failed to start:", err);
+      console.error("Speech recognition failed:", err);
     }
   };
 
@@ -122,16 +174,25 @@ export default function Farmers() {
     setPageNum(1);
   };
 
+  // Fetch farmers
   const fetchFarmers = useCallback(async () => {
     setLoading(true);
     setError(null);
+
     try {
       const res = await axios.post(
         FARMERS_URL,
         {},
         { withCredentials: true }
       );
-      setData(res.data?.farmers || []);
+
+      const farmers =
+        res.data?.farmers ||
+        res.data?.data?.farmers ||
+        res.data?.data ||
+        [];
+
+      setData(Array.isArray(farmers) ? farmers : []);
     } catch (e) {
       console.error("Error fetching farmers:", e);
       setError("Couldn't load farmers. Please try again.");
@@ -141,29 +202,70 @@ export default function Farmers() {
     }
   }, []);
 
-  // Only hit the backend once we know a session exists — avoids a guaranteed
-  // 401 (and the loading spinner that goes with it) when logged out.
   useEffect(() => {
     if (authLoading || !isLoggedIn) {
       setLoading(false);
       return;
     }
+
     fetchFarmers();
   }, [authLoading, isLoggedIn, fetchFarmers]);
 
+  // Summary calculations
+  const summary = useMemo(() => {
+    return data.reduce(
+      (acc, farmer) => {
+        acc.totalDue += Number(farmer.totalDueAmount || 0);
+        acc.totalAdvance += Number(farmer.advanceAmount || 0);
+        acc.totalWorkMinutes += Number(farmer.totalWorkMinutes || 0);
+
+        if (Number(farmer.totalDueAmount || 0) > 0) {
+          acc.farmersWithDue += 1;
+        }
+
+        if (Number(farmer.advanceAmount || 0) > 0) {
+          acc.farmersWithAdvance += 1;
+        }
+
+        return acc;
+      },
+      {
+        totalDue: 0,
+        totalAdvance: 0,
+        totalWorkMinutes: 0,
+        farmersWithDue: 0,
+        farmersWithAdvance: 0,
+      }
+    );
+  }, [data]);
+
+  // Search and filters
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return data.filter((f) => {
-      const name = (f.name || "").toLowerCase();
-      const village = (f.village || "").toLowerCase();
-      const due = Number(f.totalDueAmount || 0);
+    return data.filter((farmer) => {
+      const name = (farmer.name || "").toLowerCase();
+      const village = (farmer.village || "").toLowerCase();
+      const phone = String(farmer.phone || "").toLowerCase();
+
+      const due = Number(farmer.totalDueAmount || 0);
+      const advance = Number(farmer.advanceAmount || 0);
 
       const matchesSearch =
-        !query || name.includes(query) || village.includes(query);
+        !query ||
+        name.includes(query) ||
+        village.includes(query) ||
+        phone.includes(query);
 
-      const matchesFilter =
-        filter === "all" ? true : filter === "due" ? due > 0 : due <= 0;
+      let matchesFilter = true;
+
+      if (filter === "due") {
+        matchesFilter = due > 0;
+      } else if (filter === "cleared") {
+        matchesFilter = due <= 0;
+      } else if (filter === "advance") {
+        matchesFilter = advance > 0;
+      }
 
       return matchesSearch && matchesFilter;
     });
@@ -177,20 +279,26 @@ export default function Farmers() {
     currentPage * PER_PAGE
   );
 
+  // Delete farmer
   const handleDelete = async (e, farmerId, farmerName) => {
-    e.stopPropagation(); // don't also trigger the row's navigate
+    e.stopPropagation();
 
     const confirmed = window.confirm(
       `Delete ${farmerName || "this farmer"}? This can't be undone.`
     );
+
     if (!confirmed) return;
 
     setDeletingId(farmerId);
+
     try {
       await axios.delete(DELETE_FARMER_URL(farmerId), {
         withCredentials: true,
       });
-      setData((prev) => prev.filter((f) => f._id !== farmerId));
+
+      setData((prev) =>
+        prev.filter((farmer) => farmer._id !== farmerId)
+      );
     } catch (err) {
       console.error("Error deleting farmer:", err);
       setError("Couldn't delete that farmer. Please try again.");
@@ -199,7 +307,7 @@ export default function Farmers() {
     }
   };
 
-  // --- Auth still resolving ---
+  // Auth loading
   if (authLoading) {
     return (
       <div className="space-y-6 px-3 sm:px-0">
@@ -210,11 +318,11 @@ export default function Farmers() {
     );
   }
 
-  // --- Not logged in ---
+  // Not logged in
   if (!isLoggedIn) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center px-4">
-        <div className="w-full max-w-md rounded-3xl border border-stone-100 bg-white p-6 sm:p-8 text-center shadow-sm">
+        <div className="w-full max-w-md rounded-3xl border border-stone-100 bg-white p-6 text-center shadow-sm sm:p-8">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-500 shadow-md shadow-emerald-100">
             <Sprout size={28} className="text-white" />
           </div>
@@ -222,15 +330,16 @@ export default function Farmers() {
           <h1 className="text-lg font-semibold text-stone-800">
             Log in to view farmers
           </h1>
+
           <p className="mt-2 text-sm leading-relaxed text-stone-500">
-            Farmer records, contact details, and dues are tied to your
-            account — sign in to see them.
+            Farmer records, contact details, dues, and advance balances
+            are tied to your account.
           </p>
 
           <button
             type="button"
             onClick={() => navigate("/auth")}
-            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 active:scale-[0.98]"
+            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md active:scale-[0.98]"
           >
             <LogIn size={16} />
             Log in
@@ -241,12 +350,48 @@ export default function Farmers() {
   }
 
   return (
-    <div className="space-y-5 sm:space-y-6 px-3 sm:px-0">
+    <div className="space-y-5 px-3 sm:space-y-6 sm:px-0">
       <PageHeader
         title="Farmers"
-        subtitle="Manage farmer records and contact details"
+        subtitle="Manage farmer records, payments and advance balances"
       />
 
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <SummaryCard
+          title="Total Farmers"
+          value={data.length}
+          icon={Users}
+          color="bg-sky-50 text-sky-600"
+          description="Registered farmers"
+        />
+
+        <SummaryCard
+          title="Total Due"
+          value={inr(summary.totalDue)}
+          icon={IndianRupee}
+          color="bg-red-50 text-red-600"
+          description={`${summary.farmersWithDue} farmers have pending dues`}
+        />
+
+        <SummaryCard
+          title="Total Advance"
+          value={inr(summary.totalAdvance)}
+          icon={Wallet}
+          color="bg-emerald-50 text-emerald-600"
+          description={`${summary.farmersWithAdvance} farmers have advance`}
+        />
+
+        <SummaryCard
+          title="Total Work Time"
+          value={`${summary.totalWorkMinutes} min`}
+          icon={Clock}
+          color="bg-violet-50 text-violet-600"
+          description="Combined work duration"
+        />
+      </div>
+
+      {/* Search and filters */}
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1 sm:max-w-md">
           <HiOutlineMagnifyingGlass
@@ -260,11 +405,11 @@ export default function Farmers() {
               setSearch(e.target.value);
               setPageNum(1);
             }}
-            placeholder="Search by name or village"
-            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-20 text-sm shadow-sm outline-none transition-all duration-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+            placeholder="Search name, village or phone"
+            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-20 text-sm shadow-sm outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
           />
 
-          {search ? (
+          {search && (
             <button
               type="button"
               onClick={clearSearch}
@@ -273,14 +418,16 @@ export default function Farmers() {
             >
               <X size={18} />
             </button>
-          ) : null}
+          )}
 
           {supported && (
             <button
               type="button"
               onClick={listening ? stopListening : handleMicClick}
               className={`absolute right-3.5 top-2 transition ${
-                listening ? "text-red-500" : "text-slate-400 hover:text-emerald-600"
+                listening
+                  ? "text-red-500"
+                  : "text-slate-400 hover:text-emerald-600"
               }`}
               title={listening ? "Stop listening" : "Start voice search"}
               aria-label={listening ? "Stop voice search" : "Start voice search"}
@@ -297,18 +444,34 @@ export default function Farmers() {
           )}
         </div>
 
-        <select
-          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-auto"
-          value={filter}
-          onChange={(e) => {
-            setFilter(e.target.value);
-            setPageNum(1);
-          }}
-        >
-          <option value="all">All</option>
-          <option value="due">With Due</option>
-          <option value="cleared">Cleared</option>
-        </select>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <select
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:w-auto"
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setPageNum(1);
+            }}
+          >
+            <option value="all">All Farmers</option>
+            <option value="due">With Due</option>
+            <option value="advance">With Advance</option>
+            <option value="cleared">No Due</option>
+          </select>
+
+          <button
+            type="button"
+            onClick={fetchFarmers}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {listening && (
@@ -318,18 +481,30 @@ export default function Farmers() {
         </p>
       )}
 
+      {/* Farmer list */}
       <Card className="overflow-hidden rounded-3xl border border-slate-200/80 p-0 shadow-sm">
-        <div className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-r from-emerald-50 via-white to-green-50 px-4 sm:px-6 py-5">
-          <div className="pointer-events-none absolute -top-10 -right-10 h-32 w-32 rounded-full bg-emerald-200/30 blur-3xl" />
-          <div className="relative flex items-center gap-3">
-            <div className="hidden sm:flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-emerald-600 shadow-sm ring-1 ring-emerald-100">
-              <Users size={20} />
+        <div className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-r from-emerald-50 via-white to-green-50 px-4 py-5 sm:px-6">
+          <div className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-emerald-200/30 blur-3xl" />
+
+          <div className="relative flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="hidden h-11 w-11 items-center justify-center rounded-2xl bg-white text-emerald-600 shadow-sm ring-1 ring-emerald-100 sm:flex">
+                <Users size={20} />
+              </div>
+
+              <div>
+                <h3 className="text-base font-semibold text-slate-800 sm:text-lg">
+                  Farmer List
+                </h3>
+                <p className="text-xs text-slate-500 sm:text-sm">
+                  {filtered.length} farmer{filtered.length !== 1 ? "s" : ""} found
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-base sm:text-lg font-semibold text-slate-800">Farmer List</h3>
-              <p className="text-xs sm:text-sm text-slate-500">
-                Search and filter your farmer records
-              </p>
+
+            <div className="hidden items-center gap-1 rounded-full bg-white/80 px-3 py-1.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-100 sm:flex">
+              <TrendingUp size={13} />
+              Live records
             </div>
           </div>
         </div>
@@ -342,7 +517,9 @@ export default function Farmers() {
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <p className="mb-3 text-sm text-red-500">{error}</p>
+
             <button
+              type="button"
               onClick={fetchFarmers}
               className="rounded-full bg-slate-800 px-4 py-2 text-xs font-medium text-white hover:bg-slate-700"
             >
@@ -351,26 +528,45 @@ export default function Farmers() {
           </div>
         ) : paged.length === 0 ? (
           <div className="py-16 text-center">
-            <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
               <Users size={24} />
             </div>
-            <h4 className="text-sm font-semibold text-slate-700">No farmers found</h4>
+
+            <h4 className="text-sm font-semibold text-slate-700">
+              No farmers found
+            </h4>
+
             <p className="mt-1 text-xs text-slate-500">
               Try a different name, village, or filter.
             </p>
+
+            {(search || filter !== "all") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setFilter("all");
+                  setPageNum(1);
+                }}
+                className="mt-4 text-xs font-semibold text-emerald-600 hover:text-emerald-700"
+              >
+                Clear filters
+              </button>
+            )}
           </div>
         ) : (
           <>
-            {/* Desktop / tablet: table view, hidden below md */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full min-w-[650px] text-sm">
+            {/* Desktop table */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[850px] text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-5 py-3.5 font-medium">Farmer</th>
                     <th className="px-5 py-3.5 font-medium">Phone</th>
                     <th className="px-5 py-3.5 font-medium">Village</th>
                     <th className="px-5 py-3.5 font-medium">Work Minutes</th>
-                    <th className="px-5 py-3.5 font-medium">Due</th>
+                    <th className="px-5 py-3.5 font-medium">Due Amount</th>
+                    <th className="px-5 py-3.5 font-medium">Advance</th>
                     <th className="px-5 py-3.5 font-medium">Action</th>
                   </tr>
                 </thead>
@@ -378,6 +574,8 @@ export default function Farmers() {
                 <tbody>
                   {paged.map((f) => {
                     const due = Number(f.totalDueAmount || 0);
+                    const advance = Number(f.advanceAmount || 0);
+
                     return (
                       <tr
                         key={f._id}
@@ -386,46 +584,75 @@ export default function Farmers() {
                       >
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-3">
-                            <Avatar name={f.name} size="h-9 w-9 text-xs" />
-                            <span className="font-medium text-slate-800">{f.name}</span>
+                            <Avatar
+                              name={f.name}
+                              size="h-9 w-9 text-xs"
+                            />
+                            <span className="font-medium text-slate-800">
+                              {f.name || "Unnamed Farmer"}
+                            </span>
                           </div>
                         </td>
+
                         <td className="px-5 py-3.5 text-slate-500">
                           {f.phone || "-"}
                         </td>
+
                         <td className="px-5 py-3.5 text-slate-500">
                           {f.village || "-"}
                         </td>
+
                         <td className="px-5 py-3.5 text-slate-500">
-                          {f.totalWorkMinutes ?? 0}
+                          {f.totalWorkMinutes ?? 0} min
                         </td>
+
                         <td className="px-5 py-3.5">
-                          {due > 0 ? (
-                            <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-1 font-semibold text-red-600 ring-1 ring-red-100">
-                              {inr(due)}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-slate-50 px-2.5 py-1 text-slate-400 ring-1 ring-slate-100">
-                              {inr(due)}
-                            </span>
-                          )}
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-1 font-semibold ring-1 ${
+                              due > 0
+                                ? "bg-red-50 text-red-600 ring-red-100"
+                                : "bg-slate-50 text-slate-400 ring-slate-100"
+                            }`}
+                          >
+                            {inr(due)}
+                          </span>
                         </td>
+
+                        <td className="px-5 py-3.5">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-semibold ring-1 ${
+                              advance > 0
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+                                : "bg-slate-50 text-slate-400 ring-slate-100"
+                            }`}
+                          >
+                            <Wallet size={12} />
+                            {inr(advance)}
+                          </span>
+                        </td>
+
                         <td className="px-5 py-3.5 text-slate-500">
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={(e) => handleDelete(e, f._id, f.name)}
+                              onClick={(e) =>
+                                handleDelete(e, f._id, f.name)
+                              }
                               disabled={deletingId === f._id}
                               className="rounded-lg p-1.5 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
                               aria-label={`Delete ${f.name || "farmer"}`}
                               title="Delete farmer"
                             >
                               {deletingId === f._id ? (
-                                <Loader2 size={14} className="animate-spin" />
+                                <Loader2
+                                  size={14}
+                                  className="animate-spin"
+                                />
                               ) : (
                                 <FaRegTrashCan />
                               )}
                             </button>
+
                             <ChevronRight
                               size={16}
                               className="text-slate-300 opacity-0 transition group-hover:opacity-100"
@@ -439,22 +666,26 @@ export default function Farmers() {
               </table>
             </div>
 
-            {/* Mobile: stacked card list, shown below md */}
-            <div className="md:hidden divide-y divide-slate-100">
+            {/* Mobile cards */}
+            <div className="divide-y divide-slate-100 md:hidden">
               {paged.map((f) => {
                 const due = Number(f.totalDueAmount || 0);
+                const advance = Number(f.advanceAmount || 0);
+
                 return (
                   <div
                     key={f._id}
                     onClick={() => navigate(`/farmers/${f._id}`)}
-                    className="flex items-start justify-between gap-3 p-4 active:bg-slate-50 transition-colors"
+                    className="flex items-start justify-between gap-3 p-4 transition-colors active:bg-slate-50"
                   >
-                    <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
                       <Avatar name={f.name} />
-                      <div className="min-w-0">
-                        <p className="font-semibold text-slate-800 truncate">
-                          {f.name}
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold text-slate-800">
+                          {f.name || "Unnamed Farmer"}
                         </p>
+
                         <div className="mt-1.5 flex flex-col gap-1 text-xs text-slate-500">
                           {f.phone && (
                             <span className="flex items-center gap-1.5">
@@ -462,43 +693,65 @@ export default function Farmers() {
                               {f.phone}
                             </span>
                           )}
+
                           {f.village && (
                             <span className="flex items-center gap-1.5">
                               <MapPin size={12} className="shrink-0" />
                               {f.village}
                             </span>
                           )}
+
                           <span className="flex items-center gap-1.5">
                             <Clock size={12} className="shrink-0" />
                             {f.totalWorkMinutes ?? 0} min worked
                           </span>
                         </div>
-                        <span
-                          className={`mt-2 inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ${
-                            due > 0
-                              ? "bg-red-50 text-red-600 ring-1 ring-red-100"
-                              : "bg-slate-50 text-slate-400 ring-1 ring-slate-100"
-                          }`}
-                        >
-                          {inr(due)} due
-                        </span>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${
+                              due > 0
+                                ? "bg-red-50 text-red-600 ring-red-100"
+                                : "bg-slate-50 text-slate-400 ring-slate-100"
+                            }`}
+                          >
+                            {inr(due)} due
+                          </span>
+
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${
+                              advance > 0
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+                                : "bg-slate-50 text-slate-400 ring-slate-100"
+                            }`}
+                          >
+                            <Wallet size={11} />
+                            {inr(advance)} advance
+                          </span>
+                        </div>
                       </div>
                     </div>
 
                     <div className="flex shrink-0 flex-col items-center gap-2">
                       <button
                         type="button"
-                        onClick={(e) => handleDelete(e, f._id, f.name)}
+                        onClick={(e) =>
+                          handleDelete(e, f._id, f.name)
+                        }
                         disabled={deletingId === f._id}
                         className="rounded-lg p-2 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
                         aria-label={`Delete ${f.name || "farmer"}`}
                       >
                         {deletingId === f._id ? (
-                          <Loader2 size={14} className="animate-spin" />
+                          <Loader2
+                            size={14}
+                            className="animate-spin"
+                          />
                         ) : (
                           <FaRegTrashCan size={14} />
                         )}
                       </button>
+
                       <ChevronRight size={16} className="text-slate-300" />
                     </div>
                   </div>
@@ -509,20 +762,27 @@ export default function Farmers() {
         )}
       </Card>
 
+      {/* Pagination */}
       {!loading && !error && filtered.length > 0 && (
         <div className="flex items-center justify-center gap-2 sm:justify-start">
           <button
+            type="button"
             onClick={() => setPageNum((p) => Math.max(1, p - 1))}
             disabled={currentPage === 1}
             className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Prev
           </button>
+
           <div className="rounded-xl bg-slate-50 px-3.5 py-2 text-sm text-slate-600">
             Page {currentPage} of {totalPages}
           </div>
+
           <button
-            onClick={() => setPageNum((p) => Math.min(totalPages, p + 1))}
+            type="button"
+            onClick={() =>
+              setPageNum((p) => Math.min(totalPages, p + 1))
+            }
             disabled={currentPage === totalPages}
             className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
           >

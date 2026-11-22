@@ -7,9 +7,15 @@ const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // Owner sab dekhta hai, driver sirf apna banaya hua
 export const scopeFilter = (req) => {
-  const filter = { owner: req.user.ownerId };
-  if (req.user.role !== "owner") filter.createdBy = req.user.userId;
-  return filter;
+  const filter = {
+    owner: req.user.ownerId,
+  };
+
+  if (req.user.role === "owner" || req.user.role === "driver") {
+    return filter;
+  }
+
+  throw httpError("Unauthorized access", 403);
 };
 
 const httpError = (message, statusCode) =>
@@ -148,12 +154,28 @@ export const startWork = async (req, res) => {
 };
 
 /* ------------------------------- ADD WORK ------------------------------- */
-export const addWork = async (req, res) => {
-  try {
-    const { farmerId, fieldName, workRate, totalMinutes, paidAmount = 0, startTime, date } = req.body;
 
+export const addWork = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const {
+      farmerId,
+      fieldName,
+      workRate,
+      totalMinutes,
+      paidAmount = 0,
+      startTime,
+      date,
+    } = req.body;
+
+    // 1. VALIDATION
     if (!farmerId || !workRate) {
       throw httpError("Farmer and Work Rate are required", 400);
+    }
+
+    if (!isValidId(farmerId) || !isValidId(workRate)) {
+      throw httpError("Invalid farmer or work rate ID", 400);
     }
 
     const minutes = Number(totalMinutes);
@@ -162,55 +184,175 @@ export const addWork = async (req, res) => {
     if (!Number.isFinite(minutes) || minutes <= 0) {
       throw httpError("totalMinutes must be a positive number", 400);
     }
+
     if (!Number.isFinite(paid) || paid < 0) {
       throw httpError("paidAmount must be 0 or more", 400);
     }
 
-    const farmer = await getFarmer(req, farmerId);
-    const rateDoc = await getRate(workRate, req.user.ownerId);
+    let result;
 
-    const totalAmount = Math.ceil((minutes / 60) * rateDoc.rate);
-    const dueAmount = totalAmount - paid;
-    const endTime = new Date();
+    // 2. DATABASE TRANSACTION
+    await session.withTransaction(async () => {
 
-    const work = await WorkLog.create({
-      createdBy: req.user.userId,
-      owner: req.user.ownerId,
-      farmer: farmer._id,
-      fieldName,
-      workType: rateDoc.type,
-      workRate: rateDoc._id,
-      ratePerHour: rateDoc.rate,
-      startTime: startTime ? new Date(startTime) : new Date(endTime.getTime() - minutes * 60000),
-      endTime,
-      totalMinutes: minutes,
-      totalAmount,
-      paidAmount: paid,
-      dueAmount,
-      paymentStatus: getPaymentStatus(dueAmount, paid),
-      status: "STOPPED",
-      date: date || endTime,
+      // Get farmer
+      const farmer = await Farmer.findOne({
+        _id: farmerId,
+        ...scopeFilter(req),
+      }).session(session);
+
+      if (!farmer) {
+        throw httpError("Farmer not found", 404);
+      }
+
+      // Get work rate
+      const rateDoc = await WorkRate.findOne({
+        _id: workRate,
+        owner: req.user.ownerId,
+      }).session(session);
+
+      if (!rateDoc) {
+        throw httpError("Work rate not found", 404);
+      }
+
+      // 3. CALCULATE WORK AMOUNT
+      const totalAmount = Math.ceil(
+        (minutes / 60) * rateDoc.rate
+      );
+
+      // 4. APPLY EXISTING FARMER ADVANCE
+      const availableAdvance = Math.max(
+        0,
+        Number(farmer.advanceAmount) || 0
+      );
+
+      const advanceUsed = Math.min(
+        availableAdvance,
+        totalAmount
+      );
+
+      // Amount remaining after advance
+      const amountAfterAdvance = totalAmount - advanceUsed;
+
+      // 5. APPLY NEW CASH PAYMENT
+      const cashApplied = Math.min(
+        paid,
+        amountAfterAdvance
+      );
+
+      // Extra cash becomes new advance
+      const extraPaid = paid - cashApplied;
+
+      // Total paid against this work
+      const finalPaidAmount = advanceUsed + cashApplied;
+
+      // Remaining due
+      const dueAmount = Math.max(
+        0,
+        totalAmount - finalPaidAmount
+      );
+
+      // Final farmer advance
+      const remainingAdvance =
+        availableAdvance - advanceUsed + extraPaid;
+
+      const endTime = new Date();
+
+      // 6. CREATE WORK
+      const createdWorks = await WorkLog.create(
+        [
+          {
+            createdBy: req.user.userId,
+            owner: req.user.ownerId,
+            farmer: farmer._id,
+
+            fieldName,
+            workType: rateDoc.type,
+            workRate: rateDoc._id,
+            ratePerHour: rateDoc.rate,
+
+            startTime: startTime
+              ? new Date(startTime)
+              : new Date(endTime.getTime() - minutes * 60000),
+
+            endTime,
+            totalMinutes: minutes,
+
+            totalAmount,
+
+            // Advance + cash applied
+            paidAmount: finalPaidAmount,
+
+            dueAmount,
+
+            paymentStatus: getPaymentStatus(
+              dueAmount,
+              finalPaidAmount
+            ),
+
+            status: "STOPPED",
+            date: date || endTime,
+          },
+        ],
+        { session }
+      );
+
+      const work = createdWorks[0];
+
+      // 7. UPDATE FARMER TOTALS
+      await Farmer.updateOne(
+        { _id: farmer._id },
+        {
+          $inc: {
+            totalWorkMinutes: minutes,
+            totalBilledAmount: totalAmount,
+            totalPaidAmount: finalPaidAmount,
+            totalDueAmount: dueAmount,
+          },
+
+          $set: {
+            advanceAmount: remainingAdvance,
+            lastWorkDate: endTime,
+          },
+
+          $addToSet: {
+            works: work._id,
+          },
+        },
+        { session }
+      );
+
+      result = {
+        work,
+        summary: {
+          workAmount: totalAmount,
+          previousAdvance: availableAdvance,
+          advanceUsed,
+          cashReceived: paid,
+          cashApplied,
+          extraPaidAsAdvance: extraPaid,
+          totalPaid: finalPaidAmount,
+          remainingDue: dueAmount,
+          remainingAdvance,
+        },
+      };
     });
 
-    await Farmer.updateOne(
-      { _id: farmer._id },
-      {
-        $inc: {
-          totalWorkMinutes: minutes,
-          totalBilledAmount: totalAmount,
-          totalPaidAmount: paid,
-          totalDueAmount: dueAmount,
-        },
-        $set: { lastWorkDate: endTime },
-        $addToSet: { works: work._id },
-      }
-    );
+    // 8. SUCCESS RESPONSE
+    return res.status(201).json({
+      success: true,
+      message: "Work added successfully. Farmer advance adjusted.",
+      work: result.work,
+      summary: result.summary,
+    });
 
-    res.status(201).json({ success: true, message: "Work added successfully", work });
   } catch (err) {
     handleError(res, err, "addWork");
+
+  } finally {
+    await session.endSession();
   }
 };
+
 
 /* ------------------------------- PAUSE WORK ------------------------------ */
 export const pauseWork = async (req, res) => {

@@ -59,6 +59,7 @@ export const createFarmer = async (req, res) => {
 export const getFarmerById = async (req, res) => {
   try {
     const farmer = await Farmer.findById(req.params.id).populate('works');
+    console.log(farmer)
     res.json(farmer);
   } catch (err) {
     res.status(404).json({ error: "Farmer not found" });
@@ -85,26 +86,24 @@ export const getFarmersWithDues = async (req, res) => {
 
 export const allFarmers = async (req, res) => {
   try {
-    let filter = {};
-
-    // if (req.user.role === "owner") {
-    //   filter.owner = req.user.ownerId;
-    // } else if (req.user.role === "driver") {
-    //   filter.createdBy = req.user.userId;
-    // }
-        if (req.user.role === "owner" || req.user.role === "driver") {
-      filter.owner = req.user.ownerId;
+    if (!["owner", "driver"].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized access",
+      });
     }
 
-    const farmers = await Farmer.find(filter);
-
+    const farmers = await Farmer.find({
+      owner: req.user.ownerId,
+    });
+// console.log(farmers)
     return res.status(200).json({
       success: true,
       message: "All farmers found",
       farmers,
     });
   } catch (error) {
-    console.error(error);
+    console.error("allFarmers error:", error);
 
     return res.status(500).json({
       success: false,
