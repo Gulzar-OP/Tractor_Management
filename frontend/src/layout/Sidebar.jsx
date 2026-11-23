@@ -33,6 +33,7 @@ const OWNER_NAV = [
   { label: "Add Work", path: "/workRecords/add", icon: PlusCircle },
   { label: "Works Start", path: "/workRecords/work", icon: PlusCircle},
   { label: "Payments", path: "/payments", icon: Wallet },
+  { label: "Payment Records", path: "/payment-records", icon: Wallet },
   { label: "Due Summary", path: "/farmers/due-summary", icon: AlertCircle, end: true },
   { label: "Expenses", path: "/expenses", icon: Receipt },
   { label: "Reports", path: "/reports", icon: BarChart3 },

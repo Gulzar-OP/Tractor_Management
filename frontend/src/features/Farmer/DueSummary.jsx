@@ -1,17 +1,28 @@
-import React, { useEffect, useMemo, useState } from "react";
-import PageHeader from "../../components/UI/PageHeader";
-import StatCard from "../../components/UI/StateCard";
-import Card from "../../components/UI/Card";
-import { AlertCircle, Users, CheckCircle2, IndianRupee, Wallet, Phone, MapPin } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import {
+  AlertCircle,
+  Users,
+  CheckCircle2,
+  Wallet,
+  Phone,
+  MapPin,
+  Search,
+  X,
+  CreditCard,
+  RefreshCw,
+  ArrowUpDown,
+  SearchX,
+} from "lucide-react";
 import { inr } from "../../data/mockData";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
-
 const API = `${API_BASE}/api`;
 
-// Deterministic soft gradient per farmer so avatars feel distinct but stable
-// across re-renders, instead of a flat placeholder circle.
+/* ------------------------------ helpers ------------------------------ */
+
+// Deterministic gradient per farmer so avatars stay distinct and stable across re-renders
 const AVATAR_THEMES = [
   "from-emerald-500 to-teal-500",
   "from-amber-500 to-orange-500",
@@ -33,24 +44,36 @@ function initials(name = "") {
   return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
 }
 
-function Avatar({ name, size = "h-10 w-10 text-sm" }) {
+function Avatar({ name, size = "h-12 w-12 text-sm" }) {
   return (
     <div
-      className={`${size} shrink-0 rounded-full bg-gradient-to-br ${avatarTheme(
+      className={`${size} flex shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${avatarTheme(
         name
-      )} flex items-center justify-center font-semibold text-white shadow-sm ring-2 ring-white`}
+      )} font-bold text-white shadow-md ring-2 ring-white`}
     >
       {initials(name)}
     </div>
   );
 }
 
+const SORTS = {
+  dueDesc: { label: "Highest due", fn: (a, b) => b.due - a.due },
+  dueAsc: { label: "Lowest due", fn: (a, b) => a.due - b.due },
+  name: { label: "Name A–Z", fn: (a, b) => a.name.localeCompare(b.name) },
+};
+
+/* ------------------------------ page ------------------------------ */
+
 export default function DueSummary() {
+  const navigate = useNavigate();
+
   const [farmerRecords, setFarmerRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState("dueDesc");
 
-  const fetchFarmerRecords = async () => {
+  const fetchFarmerRecords = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
@@ -61,245 +84,322 @@ export default function DueSummary() {
         { withCredentials: true }
       );
 
-      setFarmerRecords(response.data?.farmers || []);
+      const list =
+        response.data?.farmers || response.data?.all || response.data?.data || [];
+      setFarmerRecords(Array.isArray(list) ? list : []);
     } catch (err) {
       console.error("Error fetching farmer records:", err);
-      setError("Failed to load due summary.");
+      setError(err.response?.data?.message || "Failed to load due summary.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchFarmerRecords();
-  }, []);
+  }, [fetchFarmerRecords]);
 
-  const dueRecords = useMemo(() => {
-    return farmerRecords.filter((f) => Number(f.totalDueAmount || 0) > 0);
-  }, [farmerRecords]);
+  /* ---------------- derived ---------------- */
 
-  const totalOutstanding = useMemo(() => {
-    return dueRecords.reduce((sum, f) => sum + Number(f.totalDueAmount || 0), 0);
-  }, [dueRecords]);
+  // Normalise numbers once so the rest of the page never repeats Number(... || 0)
+  const rows = useMemo(
+    () =>
+      farmerRecords.map((f) => ({
+        ...f,
+        name: f.name || "Unknown",
+        due: Number(f.totalDueAmount || 0),
+        paid: Number(f.totalPaidAmount || 0),
+        billed: Number(f.totalBilledAmount || 0),
+      })),
+    [farmerRecords]
+  );
 
-  const totalCollected = useMemo(() => {
-    return farmerRecords.reduce((sum, f) => sum + Number(f.totalPaidAmount || 0), 0);
-  }, [farmerRecords]);
+  const dueRecords = useMemo(() => rows.filter((f) => f.due > 0), [rows]);
 
-  const totalBilled = useMemo(() => {
-    return farmerRecords.reduce((sum, f) => sum + Number(f.totalBilledAmount || 0), 0);
-  }, [farmerRecords]);
+  const { totalOutstanding, totalCollected, totalBilled } = useMemo(
+    () => ({
+      totalOutstanding: dueRecords.reduce((s, f) => s + f.due, 0),
+      totalCollected: rows.reduce((s, f) => s + f.paid, 0),
+      totalBilled: rows.reduce((s, f) => s + f.billed, 0),
+    }),
+    [dueRecords, rows]
+  );
+
+  const clearedCount = Math.max(rows.length - dueRecords.length, 0);
+
+  const collectedPercent =
+    totalBilled > 0
+      ? Math.min(100, Math.round((totalCollected / totalBilled) * 100))
+      : 0;
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? dueRecords.filter((f) =>
+          [f.name, f.phone, f.village]
+            .filter(Boolean)
+            .some((v) => String(v).toLowerCase().includes(q))
+        )
+      : dueRecords;
+    return [...filtered].sort(SORTS[sortKey].fn);
+  }, [dueRecords, query, sortKey]);
+
+  const handleCollect = (f) => {
+    navigate("/payments", {
+      state: {
+        farmerID: f._id,
+        farmerName: f.name,
+        dueAmount: f.due,
+      },
+    });
+  };
+
+  /* ---------------- render ---------------- */
 
   return (
-    <div className="space-y-5 sm:space-y-6 px-3 sm:px-0">
-      <PageHeader
-        title="Due Summary"
-        subtitle="Track outstanding balances across all farmers"
-      />
+    <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6 lg:p-8">
+      {/* Hero */}
+      <header className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-teal-800 p-6 text-white shadow-2xl shadow-emerald-950/20 sm:p-8">
+        <div className="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full border-[40px] border-white/5" />
+        <div className="pointer-events-none absolute -bottom-24 left-1/3 h-60 w-60 rounded-full bg-rose-400/10 blur-3xl" />
 
-      {/* Stats grid: 1 col on mobile, 2 on small, 4 on xl */}
-      <div className="grid grid-cols-1 xs:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
-        <StatCard
-          Icon={AlertCircle}
-          label="Total Outstanding Due"
-          value={inr(totalOutstanding)}
-          tone="red"
-        />
-        <StatCard
-          Icon={Users}
-          label="Farmers with Due"
-          value={dueRecords.length}
-          tone="amber"
-        />
-        <StatCard
-          Icon={CheckCircle2}
-          label="Fully Cleared"
-          value={Math.max(farmerRecords.length - dueRecords.length, 0)}
-          tone="green"
-        />
-        <StatCard
-          Icon={Wallet}
-          label="Total Collected"
-          value={inr(totalCollected)}
-          tone="emerald"
-        />
-      </div>
-
-      <Card className="p-0 overflow-hidden rounded-3xl border border-slate-200/80 shadow-sm">
-        <div className="relative overflow-hidden bg-gradient-to-r from-red-50 via-white to-amber-50 px-4 sm:px-6 py-5 border-b border-slate-200">
-          {/* soft decorative glow, purely cosmetic */}
-          <div className="pointer-events-none absolute -top-10 -right-10 h-32 w-32 rounded-full bg-red-200/30 blur-3xl" />
-
-          <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-            <div className="flex items-center gap-3">
-              <div className="hidden sm:flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-red-500 shadow-sm ring-1 ring-red-100">
-                <AlertCircle size={20} />
-              </div>
-              <div>
-                <h3 className="text-base sm:text-lg font-semibold text-slate-800">Due Farmers</h3>
-                <p className="text-xs sm:text-sm text-slate-500">
-                  Only farmers with pending dues are shown below
-                </p>
-              </div>
+        <div className="relative grid gap-8 lg:grid-cols-5 lg:items-end">
+          <div className="lg:col-span-3">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-bold uppercase tracking-wider text-emerald-100 ring-1 ring-white/15">
+              <AlertCircle size={13} />
+              Due Summary
             </div>
-            <div className="flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm text-slate-600 border border-slate-200 shadow-sm self-start sm:self-auto">
-              <IndianRupee size={16} className="text-red-500 shrink-0" />
-              <span className="font-semibold text-slate-800">{inr(totalOutstanding)}</span>
-              <span className="text-slate-400">outstanding</span>
+
+            <p className="mt-5 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200/70">
+              Total outstanding
+            </p>
+            <p className="mt-1 text-5xl font-extrabold tabular-nums tracking-tight text-rose-200 sm:text-6xl">
+              {inr(totalOutstanding)}
+            </p>
+            <p className="mt-2 text-sm text-emerald-100/80">
+              across {dueRecords.length} farmer{dueRecords.length === 1 ? "" : "s"} with
+              pending dues
+            </p>
+
+            <div className="mt-6 max-w-md">
+              <div className="flex items-center justify-between text-xs font-semibold text-emerald-100/80">
+                <span>Collected so far</span>
+                <span className="text-emerald-300">{collectedPercent}%</span>
+              </div>
+              <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-emerald-300 to-emerald-500 transition-all duration-700"
+                  style={{ width: `${collectedPercent}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-emerald-100/60">
+                {inr(totalCollected)} of {inr(totalBilled)} billed
+              </p>
             </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 lg:col-span-2 lg:grid-cols-1">
+            <HeroChip icon={Users} label="With due" value={dueRecords.length} />
+            <HeroChip icon={CheckCircle2} label="Fully cleared" value={clearedCount} />
+            <HeroChip icon={Wallet} label="Collected" value={inr(totalCollected)} />
           </div>
         </div>
+      </header>
 
-        {loading ? (
-          <div className="flex flex-col items-center justify-center gap-3 p-10 sm:p-14 text-slate-400">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-emerald-500" />
-            <p className="text-sm">Loading due records…</p>
-          </div>
-        ) : error ? (
-          <div className="p-8 sm:p-10 text-center">
-            <p className="text-sm text-red-500 mb-3">{error}</p>
+      {/* Toolbar */}
+      <section className="flex flex-col gap-3 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-stone-900/5 sm:flex-row sm:items-center sm:p-4">
+        <div className="relative flex-1">
+          <Search
+            size={17}
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400"
+          />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name, phone or village"
+            className="w-full rounded-2xl border border-stone-200 bg-stone-50 py-3 pl-11 pr-10 text-sm font-medium text-stone-800 outline-none transition placeholder:font-normal placeholder:text-stone-400 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+          />
+          {query && (
             <button
-              onClick={fetchFarmerRecords}
-              className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm hover:bg-slate-800 transition-colors"
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-stone-400 transition hover:bg-stone-200 hover:text-stone-600"
             >
-              Retry
+              <X size={14} />
             </button>
+          )}
+        </div>
+
+        <div className="relative sm:w-48">
+          <ArrowUpDown
+            size={15}
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400"
+          />
+          <select
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value)}
+            aria-label="Sort farmers"
+            className="w-full appearance-none rounded-2xl border border-stone-200 bg-stone-50 py-3 pl-10 pr-4 text-sm font-semibold text-stone-700 outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+          >
+            {Object.entries(SORTS).map(([key, s]) => (
+              <option key={key} value={key}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </section>
+
+      {/* Content */}
+      {loading ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-52 animate-pulse rounded-3xl bg-stone-200/70" />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="rounded-3xl bg-white p-10 text-center shadow-sm ring-1 ring-stone-900/5">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">
+            <AlertCircle size={26} />
           </div>
-        ) : dueRecords.length === 0 ? (
-          <div className="p-10 sm:p-14 text-center">
-            <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-200">
-              <CheckCircle2 size={26} />
-            </div>
-            <h4 className="text-base sm:text-lg font-semibold text-slate-800">No dues pending</h4>
-            <p className="text-sm text-slate-500 mt-1">
-              All farmers are fully cleared right now.
-            </p>
+          <p className="mt-4 font-bold text-stone-800">{error}</p>
+          <button
+            onClick={fetchFarmerRecords}
+            className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-stone-700"
+          >
+            <RefreshCw size={15} />
+            Retry
+          </button>
+        </div>
+      ) : dueRecords.length === 0 ? (
+        <div className="rounded-3xl bg-white p-12 text-center shadow-sm ring-1 ring-stone-900/5">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-lg shadow-emerald-500/30">
+            <CheckCircle2 size={30} />
           </div>
-        ) : (
-          <>
-            {/* Desktop / tablet: table view, hidden below md */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-sm min-w-[750px]">
-                <thead>
-                  <tr className="text-left text-slate-400 text-xs uppercase tracking-wide border-b border-slate-100">
-                    <th className="py-3.5 px-5 font-medium">Farmer</th>
-                    <th className="py-3.5 px-5 font-medium">Phone</th>
-                    <th className="py-3.5 px-5 font-medium">Village</th>
-                    <th className="py-3.5 px-5 font-medium">Total Amount</th>
-                    <th className="py-3.5 px-5 font-medium">Paid</th>
-                    <th className="py-3.5 px-5 font-medium">Due</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dueRecords.map((f) => {
-                    const due = Number(f.totalDueAmount || 0);
-                    const total = Number(f.totalBilledAmount || 0);
-                    const paid = Number(f.totalPaidAmount || 0);
-                    const paidPct = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
+          <h2 className="mt-5 text-lg font-extrabold text-stone-900">No dues pending</h2>
+          <p className="mt-1 text-sm text-stone-500">
+            All farmers are fully cleared right now.
+          </p>
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="rounded-3xl border-2 border-dashed border-stone-200 bg-white p-12 text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-100 text-stone-300">
+            <SearchX size={26} />
+          </div>
+          <p className="mt-4 font-bold text-stone-700">No farmers match &quot;{query}&quot;</p>
+          <button
+            onClick={() => setQuery("")}
+            className="mt-3 text-sm font-semibold text-emerald-700 hover:underline"
+          >
+            Clear search
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="px-1 text-sm font-semibold text-stone-500">
+            Showing {visible.length} of {dueRecords.length} farmer
+            {dueRecords.length === 1 ? "" : "s"}
+          </p>
 
-                    return (
-                      <tr
-                        key={f._id}
-                        className="group border-b last:border-0 hover:bg-slate-50/80 transition-colors"
-                      >
-                        <td className="py-3.5 px-5">
-                          <div className="flex items-center gap-3">
-                            <Avatar name={f.name || "Unknown"} size="h-9 w-9 text-xs" />
-                            <span className="font-medium text-slate-800">
-                              {f.name || "Unknown"}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-5 text-slate-500">{f.phone || "-"}</td>
-                        <td className="py-3.5 px-5 text-slate-500">{f.village || "-"}</td>
-                        <td className="py-3.5 px-5 text-slate-700">{inr(total)}</td>
-                        <td className="py-3.5 px-5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-emerald-600 font-medium">{inr(paid)}</span>
-                            <div className="hidden lg:block h-1.5 w-16 rounded-full bg-slate-100 overflow-hidden">
-                              <div
-                                className="h-full rounded-full bg-emerald-500"
-                                style={{ width: `${paidPct}%` }}
-                              />
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-5">
-                          <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-1 font-semibold text-red-600 ring-1 ring-red-100">
-                            {inr(due)}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {visible.map((f) => {
+              const paidPct =
+                f.billed > 0
+                  ? Math.min(100, Math.round((f.paid / f.billed) * 100))
+                  : 0;
 
-            {/* Mobile: stacked card list, shown below md */}
-            <div className="md:hidden divide-y divide-slate-100">
-              {dueRecords.map((f) => {
-                const due = Number(f.totalDueAmount || 0);
-                const total = Number(f.totalBilledAmount || 0);
-                const paid = Number(f.totalPaidAmount || 0);
-                const paidPct = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
-
-                return (
-                  <div key={f._id} className="p-4 active:bg-slate-50 transition-colors">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <Avatar name={f.name || "Unknown"} />
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-800 truncate">
-                            {f.name || "Unknown"}
-                          </p>
-                          <div className="mt-1 flex flex-col gap-0.5 text-xs text-slate-500">
-                            {f.phone && (
-                              <span className="flex items-center gap-1.5">
-                                <Phone size={12} className="shrink-0" />
-                                {f.phone}
-                              </span>
-                            )}
-                            {f.village && (
-                              <span className="flex items-center gap-1.5">
-                                <MapPin size={12} className="shrink-0" />
-                                {f.village}
-                              </span>
-                            )}
-                          </div>
+              return (
+                <article
+                  key={f._id}
+                  className="group flex flex-col justify-between rounded-3xl bg-white p-5 shadow-sm ring-1 ring-stone-900/5 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-stone-900/5"
+                >
+                  <div>
+                    <div className="flex items-start gap-3">
+                      <Avatar name={f.name} />
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate font-bold text-stone-900">{f.name}</h3>
+                        <div className="mt-1 space-y-0.5 text-xs text-stone-500">
+                          {f.village && (
+                            <p className="flex items-center gap-1.5">
+                              <MapPin size={12} className="shrink-0 text-stone-400" />
+                              <span className="truncate">{f.village}</span>
+                            </p>
+                          )}
+                          {f.phone && (
+                            <p className="flex items-center gap-1.5">
+                              <Phone size={12} className="shrink-0 text-stone-400" />
+                              {f.phone}
+                            </p>
+                          )}
                         </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-[11px] uppercase tracking-wide text-slate-400">Due</p>
-                        <p className="font-bold text-red-600">{inr(due)}</p>
                       </div>
                     </div>
 
-                    <div className="mt-3 rounded-xl bg-slate-50 p-2.5">
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div>
-                          <p className="text-slate-400">Total Amount</p>
-                          <p className="font-medium text-slate-700">{inr(total)}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-400">Paid</p>
-                          <p className="font-medium text-emerald-600">{inr(paid)}</p>
-                        </div>
+                    <div className="mt-5 flex items-end justify-between">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-stone-400">
+                          Due
+                        </p>
+                        <p className="text-2xl font-extrabold tabular-nums text-rose-600">
+                          {inr(f.due)}
+                        </p>
                       </div>
-                      <div className="mt-2 h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-500"
-                          style={{ width: `${paidPct}%` }}
-                        />
-                      </div>
+                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                        {paidPct}% paid
+                      </span>
                     </div>
+
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-stone-100">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600 transition-all duration-700"
+                        style={{ width: `${paidPct}%` }}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-xs text-stone-400">
+                      {inr(f.paid)} of {inr(f.billed)} billed
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </Card>
+
+                  <div className="mt-5 flex gap-2">
+                    <button
+                      onClick={() => handleCollect(f)}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-700 active:scale-[0.97]"
+                    >
+                      <CreditCard size={15} />
+                      Collect
+                    </button>
+
+                    {f.phone && (
+                      <a
+                        href={`tel:${f.phone}`}
+                        aria-label={`Call ${f.name}`}
+                        className="inline-flex items-center justify-center rounded-2xl bg-stone-100 px-4 py-2.5 text-stone-600 transition hover:bg-emerald-50 hover:text-emerald-700"
+                      >
+                        <Phone size={16} />
+                      </a>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------ parts ------------------------------ */
+
+function HeroChip({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-2xl bg-white/10 px-4 py-3 ring-1 ring-white/15 backdrop-blur">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-emerald-100/70">
+        <Icon size={12} />
+        {label}
+      </p>
+      <p className="mt-1 truncate text-lg font-extrabold tabular-nums">{value}</p>
     </div>
   );
 }

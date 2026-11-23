@@ -1,159 +1,386 @@
+
 import mongoose from "mongoose";
+
 import Farmer from "../models/farmer.model.js";
 import WorkLog from "../models/work.model.js";
 import WorkRate from "../models/workRate.model.js";
+import Payment from "../models/payment.model.js";
 
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+import FarmerAdvanceLot from "../models/farmerAdvanceLot.model.js";
 
-// Owner sab dekhta hai, driver sirf apna banaya hua
-export const scopeFilter = (req) => {
-  const filter = {
-    owner: req.user.ownerId,
-  };
+import {
+  applyFarmerAdvance,
+  syncFarmerSummary,
+  restoreWorkAdvanceAllocations,
+  recordAdvanceMovement,
+} from "../utils/workAccounting.js";
 
-  if (req.user.role === "owner" || req.user.role === "driver") {
-    return filter;
-  }
+// =====================================================
+// COMMON HELPERS
+// =====================================================
 
-  throw httpError("Unauthorized access", 403);
-};
+const isValidId = (id) =>
+  mongoose.Types.ObjectId.isValid(id);
 
-const httpError = (message, statusCode) =>
+const httpError = (message, statusCode = 500) =>
   Object.assign(new Error(message), { statusCode });
 
 const handleError = (res, err, label) => {
-  if (!err.statusCode) console.error(`${label} error:`, err);
+  if (!err.statusCode) {
+    console.error(`${label} error:`, err);
+  }
+
   return res.status(err.statusCode || 500).json({
     success: false,
     message: err.statusCode ? err.message : "Server error",
   });
 };
 
-const round2 = (n) => Math.round(n * 100) / 100;
-const minutesSince = (date) => (Date.now() - date.getTime()) / 60000;
+const round2 = (number) =>
+  Math.round(
+    (Number(number || 0) + Number.EPSILON) * 100
+  ) / 100;
+
+const minutesSince = (date) => {
+  if (!date) return 0;
+
+  const elapsedSeconds = Math.max(
+    0,
+    (Date.now() - new Date(date).getTime()) / 1000
+  );
+
+  return Math.round((elapsedSeconds / 60) * 10000) / 10000;
+};
+
+const getOwner = (req) =>
+  req.user?.ownerId || req.user?.userId;
 
 const getPaymentStatus = (dueAmount, paidAmount) => {
-  if (dueAmount < 0) return "advanced";
-  if (dueAmount === 0) return "paid";
+  if (dueAmount <= 0) return "paid";
   if (paidAmount > 0) return "partial";
   return "due";
 };
 
-// Rate sirf isi owner ka valid hai
-const getRate = async (workRateId, owner) => {
-  if (!isValidId(workRateId)) throw httpError("Invalid work rate id", 400);
-  const rate = await WorkRate.findOne({ _id: workRateId, owner });
-  if (!rate) throw httpError("Work rate not found", 404);
+// Owner sees all work. Driver sees work under same owner.
+export const scopeFilter = (req) => {
+  const owner = getOwner(req);
+
+  if (!owner) {
+    throw httpError("Unauthorized", 401);
+  }
+
+  if (
+    req.user.role === "owner" ||
+    req.user.role === "driver"
+  ) {
+    return { owner };
+  }
+
+  throw httpError("Unauthorized access", 403);
+};
+
+// =====================================================
+// GET RATE
+// =====================================================
+
+const getRate = async (workRateId, owner, session = null) => {
+  if (!isValidId(workRateId)) {
+    throw httpError("Invalid work rate ID", 400);
+  }
+
+  let query = WorkRate.findOne({
+    _id: workRateId,
+    owner,
+  });
+
+  if (session) query = query.session(session);
+
+  const rate = await query;
+
+  if (!rate) {
+    throw httpError("Work rate not found", 404);
+  }
+
   return rate;
 };
 
-// Farmer is user ke scope me hona chahiye
-const getFarmer = async (req, farmerId) => {
-  if (!isValidId(farmerId)) throw httpError("Invalid farmer id", 400);
-  const farmer = await Farmer.findOne({ _id: farmerId, ...scopeFilter(req) }).select("_id");
-  if (!farmer) throw httpError("Farmer not found", 404);
+// =====================================================
+// GET FARMER
+// =====================================================
+
+const getFarmer = async (req, farmerId, session = null) => {
+  if (!isValidId(farmerId)) {
+    throw httpError("Invalid farmer ID", 400);
+  }
+
+  let query = Farmer.findOne({
+    _id: farmerId,
+    ...scopeFilter(req),
+  });
+
+  if (session) query = query.session(session);
+
+  const farmer = await query;
+
+  if (!farmer) {
+    throw httpError("Farmer not found", 404);
+  }
+
   return farmer;
 };
 
-const getWork = async (req) => {
-  if (!isValidId(req.params.id)) throw httpError("Invalid work id", 400);
-  const work = await WorkLog.findOne({ _id: req.params.id, ...scopeFilter(req) });
-  if (!work) throw httpError("Work not found", 404);
+// =====================================================
+// GET WORK
+// =====================================================
+
+const getWork = async (req, session = null) => {
+  if (!isValidId(req.params.id)) {
+    throw httpError("Invalid work ID", 400);
+  }
+
+  let query = WorkLog.findOne({
+    _id: req.params.id,
+    ...scopeFilter(req),
+  });
+
+  if (session) query = query.session(session);
+
+  const work = await query;
+
+  if (!work) {
+    throw httpError("Work not found", 404);
+  }
+
   return work;
 };
 
-/* ------------------------------ START WORK ------------------------------ */
+// =====================================================
+// REVERSE LINKED PAYMENT ADVANCE
+// =====================================================
+
+/**
+ * Reverses the advance created by a payment linked
+ * to the work being deleted.
+ *
+ * Deletion is blocked if any part of this payment's
+ * advance has already been consumed by another work.
+ */
+const reverseLinkedPaymentAdvance = async ({
+  payment,
+  farmer,
+  owner,
+  session,
+}) => {
+  const advanceAmount = round2(
+    payment.advanceAmount || 0
+  );
+
+  if (advanceAmount <= 0) {
+    return 0;
+  }
+
+  const lot = await FarmerAdvanceLot.findOne({
+    owner,
+    farmerID: farmer._id,
+    paymentId: payment._id,
+    sourceType: "PAYMENT",
+    status: "ACTIVE",
+  }).session(session);
+
+  if (!lot) {
+    throw httpError(
+      `Advance source lot missing for payment ${payment._id}. Reconciliation required.`,
+      409
+    );
+  }
+
+  const originalAmount = round2(
+    lot.originalAmount
+  );
+
+  const remainingAmount = round2(
+    lot.remainingAmount
+  );
+
+  if (
+    Math.abs(originalAmount - advanceAmount) > 0.01
+  ) {
+    throw httpError(
+      `Payment and advance lot mismatch for payment ${payment._id}.`,
+      409
+    );
+  }
+
+  if (
+    Math.abs(remainingAmount - originalAmount) > 0.01
+  ) {
+    throw httpError(
+      `Cannot delete work: advance of linked payment ${payment._id} has been consumed by another work. Restore that work's allocation first.`,
+      409
+    );
+  }
+
+  if (
+    round2(farmer.advanceAmount) + 0.01 <
+    advanceAmount
+  ) {
+    throw httpError(
+      "Insufficient farmer advance balance to reverse linked payment.",
+      409
+    );
+  }
+
+  farmer.advanceAmount = round2(
+    Number(farmer.advanceAmount || 0) -
+    advanceAmount
+  );
+
+  await farmer.save({ session });
+
+  lot.remainingAmount = 0;
+  lot.status = "REVERSED";
+
+  await lot.save({ session });
+
+  await recordAdvanceMovement({
+    farmer,
+    owner,
+    type: "DEBIT",
+    amount: advanceAmount,
+    paymentId: payment._id,
+    description: `Advance reversed because linked work ${payment.workId} was deleted`,
+    referenceId: `DELETE-WORK-PAYMENT-${payment._id}`,
+    session,
+  });
+
+  return advanceAmount;
+};
+
+// =====================================================
+// START WORK
+// =====================================================
+
 export const startWork = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const {
       hourlyRate,
       description,
       workDate,
-      mode,
       farmerId,
       fieldName,
       workRate,
     } = req.body;
 
-    // Validation
-    if (!hourlyRate && !workRate) {
+    const owner = getOwner(req);
+
+    if (!farmerId) {
+      throw httpError(
+        "Farmer is required to start work",
+        400
+      );
+    }
+
+    if (!workRate && hourlyRate === undefined) {
       throw httpError("Hourly rate is required", 400);
     }
+
+    const farmer = await getFarmer(req, farmerId);
 
     let ratePerHour = Number(hourlyRate);
     let rateDoc = null;
 
-    // If frontend sends workRate ID, fetch rate from database
     if (workRate) {
-      rateDoc = await getRate(workRate, req.user.ownerId);
-      ratePerHour = rateDoc.rate;
+      rateDoc = await getRate(workRate, owner);
+      ratePerHour = Number(rateDoc.rate);
     }
 
-    // Farmer is optional for generic timer
-    let farmer = null;
-
-    if (farmerId) {
-      farmer = await getFarmer(req, farmerId);
+    if (
+      !Number.isFinite(ratePerHour) ||
+      ratePerHour < 0
+    ) {
+      throw httpError("Invalid hourly rate", 400);
     }
 
-    const now = new Date();
+    const date = workDate
+      ? new Date(workDate)
+      : new Date();
 
-    const work = await WorkLog.create({
-      createdBy: req.user.userId,
-      owner: req.user.ownerId,
+    if (Number.isNaN(date.getTime())) {
+      throw httpError("Invalid work date", 400);
+    }
 
-      farmer: farmer?._id || undefined,
+    let createdWork;
 
-      fieldName: fieldName || description || "General Work",
+    await session.withTransaction(async () => {
+      const now = new Date();
 
-      workType: rateDoc?.type || "General",
+      const [work] = await WorkLog.create(
+        [
+          {
+            createdBy: req.user.userId,
+            owner,
+            farmer: farmer._id,
 
-      workRate: rateDoc?._id || undefined,
+            fieldName:
+              fieldName || description || "General Work",
 
-      ratePerHour,
+            workType: rateDoc?.type || "General",
+            workRate: rateDoc?._id,
+            ratePerHour,
 
-      status: "RUNNING",
+            status: "RUNNING",
 
-      startTime: now,
-      lastResumeTime: now,
+            startTime: now,
+            lastResumeTime: now,
 
-      totalMinutes: 0,
+            totalMinutes: 0,
+            totalAmount: 0,
+            paidAmount: 0,
+            advanceAppliedAmount: 0,
+            dueAmount: 0,
 
-      paidAmount: 0,
-      totalAmount: 0,
-      dueAmount: 0,
+            paymentStatus: "due",
+            date,
+          },
+        ],
+        { session }
+      );
 
-      paymentStatus: "due",
-
-      date: workDate || now,
-
-      mode: mode || "timer",
-    });
-
-    // Add work to farmer only if farmer exists
-    if (farmer) {
       await Farmer.updateOne(
-        { _id: farmer._id },
+        {
+          _id: farmer._id,
+          owner,
+        },
         {
           $addToSet: {
             works: work._id,
           },
-        }
+        },
+        { session }
       );
-    }
+
+      createdWork = work;
+    });
 
     return res.status(201).json({
       success: true,
       message: "Work started successfully",
-      work,
+      work: createdWork,
+      messageInfo:
+        "Advance will be adjusted automatically when work is stopped and its amount is calculated.",
     });
-
   } catch (err) {
-    handleError(res, err, "startWork");
+    return handleError(res, err, "startWork");
+  } finally {
+    await session.endSession();
   }
 };
 
-/* ------------------------------- ADD WORK ------------------------------- */
+// =====================================================
+// ADD COMPLETED WORK
+// =====================================================
 
 export const addWork = async (req, res) => {
   const session = await mongoose.startSession();
@@ -164,37 +391,69 @@ export const addWork = async (req, res) => {
       fieldName,
       workRate,
       totalMinutes,
-      paidAmount = 0,
       startTime,
       date,
+      paidAmount = 0,
     } = req.body;
 
-    // 1. VALIDATION
+    const owner = getOwner(req);
+
     if (!farmerId || !workRate) {
-      throw httpError("Farmer and Work Rate are required", 400);
+      throw httpError(
+        "Farmer and work rate are required",
+        400
+      );
     }
 
-    if (!isValidId(farmerId) || !isValidId(workRate)) {
-      throw httpError("Invalid farmer or work rate ID", 400);
+    if (
+      !isValidId(farmerId) ||
+      !isValidId(workRate)
+    ) {
+      throw httpError(
+        "Invalid farmer or work rate ID",
+        400
+      );
     }
 
     const minutes = Number(totalMinutes);
-    const paid = Number(paidAmount);
+    const manualPaid = Number(paidAmount);
 
     if (!Number.isFinite(minutes) || minutes <= 0) {
-      throw httpError("totalMinutes must be a positive number", 400);
+      throw httpError(
+        "Total minutes must be greater than zero",
+        400
+      );
     }
 
-    if (!Number.isFinite(paid) || paid < 0) {
-      throw httpError("paidAmount must be 0 or more", 400);
+    if (
+      !Number.isFinite(manualPaid) ||
+      manualPaid !== 0
+    ) {
+      throw httpError(
+        "Do not send paidAmount while creating work. Add payment separately through the payment API.",
+        400
+      );
+    }
+
+    const start = startTime
+      ? new Date(startTime)
+      : null;
+
+    if (start && Number.isNaN(start.getTime())) {
+      throw httpError("Invalid start time", 400);
+    }
+
+    const workDate = date
+      ? new Date(date)
+      : new Date();
+
+    if (Number.isNaN(workDate.getTime())) {
+      throw httpError("Invalid work date", 400);
     }
 
     let result;
 
-    // 2. DATABASE TRANSACTION
     await session.withTransaction(async () => {
-
-      // Get farmer
       const farmer = await Farmer.findOne({
         _id: farmerId,
         ...scopeFilter(req),
@@ -204,65 +463,26 @@ export const addWork = async (req, res) => {
         throw httpError("Farmer not found", 404);
       }
 
-      // Get work rate
       const rateDoc = await WorkRate.findOne({
         _id: workRate,
-        owner: req.user.ownerId,
+        owner,
       }).session(session);
 
       if (!rateDoc) {
         throw httpError("Work rate not found", 404);
       }
 
-      // 3. CALCULATE WORK AMOUNT
       const totalAmount = Math.ceil(
         (minutes / 60) * rateDoc.rate
       );
 
-      // 4. APPLY EXISTING FARMER ADVANCE
-      const availableAdvance = Math.max(
-        0,
-        Number(farmer.advanceAmount) || 0
-      );
-
-      const advanceUsed = Math.min(
-        availableAdvance,
-        totalAmount
-      );
-
-      // Amount remaining after advance
-      const amountAfterAdvance = totalAmount - advanceUsed;
-
-      // 5. APPLY NEW CASH PAYMENT
-      const cashApplied = Math.min(
-        paid,
-        amountAfterAdvance
-      );
-
-      // Extra cash becomes new advance
-      const extraPaid = paid - cashApplied;
-
-      // Total paid against this work
-      const finalPaidAmount = advanceUsed + cashApplied;
-
-      // Remaining due
-      const dueAmount = Math.max(
-        0,
-        totalAmount - finalPaidAmount
-      );
-
-      // Final farmer advance
-      const remainingAdvance =
-        availableAdvance - advanceUsed + extraPaid;
-
       const endTime = new Date();
 
-      // 6. CREATE WORK
-      const createdWorks = await WorkLog.create(
+      const [work] = await WorkLog.create(
         [
           {
             createdBy: req.user.userId,
-            owner: req.user.ownerId,
+            owner,
             farmer: farmer._id,
 
             fieldName,
@@ -270,50 +490,36 @@ export const addWork = async (req, res) => {
             workRate: rateDoc._id,
             ratePerHour: rateDoc.rate,
 
-            startTime: startTime
-              ? new Date(startTime)
-              : new Date(endTime.getTime() - minutes * 60000),
+            startTime:
+              start ||
+              new Date(
+                endTime.getTime() - minutes * 60000
+              ),
 
             endTime,
-            totalMinutes: minutes,
+            totalMinutes: round2(minutes),
 
             totalAmount,
+            paidAmount: 0,
+            advanceAppliedAmount: 0,
+            dueAmount: totalAmount,
 
-            // Advance + cash applied
-            paidAmount: finalPaidAmount,
-
-            dueAmount,
-
-            paymentStatus: getPaymentStatus(
-              dueAmount,
-              finalPaidAmount
-            ),
+            paymentStatus:
+              totalAmount === 0 ? "paid" : "due",
 
             status: "STOPPED",
-            date: date || endTime,
+            date: workDate,
           },
         ],
         { session }
       );
 
-      const work = createdWorks[0];
-
-      // 7. UPDATE FARMER TOTALS
       await Farmer.updateOne(
-        { _id: farmer._id },
         {
-          $inc: {
-            totalWorkMinutes: minutes,
-            totalBilledAmount: totalAmount,
-            totalPaidAmount: finalPaidAmount,
-            totalDueAmount: dueAmount,
-          },
-
-          $set: {
-            advanceAmount: remainingAdvance,
-            lastWorkDate: endTime,
-          },
-
+          _id: farmer._id,
+          owner,
+        },
+        {
           $addToSet: {
             works: work._id,
           },
@@ -321,173 +527,770 @@ export const addWork = async (req, res) => {
         { session }
       );
 
+      const advanceResult = await applyFarmerAdvance(
+        work,
+        session
+      );
+
+      const summary = await syncFarmerSummary(
+        farmer._id,
+        owner,
+        session
+      );
+
       result = {
         work,
         summary: {
           workAmount: totalAmount,
-          previousAdvance: availableAdvance,
-          advanceUsed,
-          cashReceived: paid,
-          cashApplied,
-          extraPaidAsAdvance: extraPaid,
-          totalPaid: finalPaidAmount,
-          remainingDue: dueAmount,
-          remainingAdvance,
+          advanceApplied: advanceResult.applied,
+          remainingDue: advanceResult.remainingDue,
+          remainingAdvance: advanceResult.remainingAdvance,
+          totalFarmerDue: summary.totalDueAmount,
         },
       };
     });
 
-    // 8. SUCCESS RESPONSE
     return res.status(201).json({
       success: true,
-      message: "Work added successfully. Farmer advance adjusted.",
-      work: result.work,
-      summary: result.summary,
+      message:
+        "Work added successfully. Advance adjusted automatically.",
+      ...result,
     });
-
   } catch (err) {
-    handleError(res, err, "addWork");
-
+    return handleError(res, err, "addWork");
   } finally {
     await session.endSession();
   }
 };
 
+// =====================================================
+// PAUSE WORK
+// =====================================================
 
-/* ------------------------------- PAUSE WORK ------------------------------ */
 export const pauseWork = async (req, res) => {
   try {
     const work = await getWork(req);
 
     if (work.status !== "RUNNING") {
-      throw httpError("Only running work can be paused", 400);
+      throw httpError(
+        "Only running work can be paused",
+        400
+      );
     }
 
-    // Seconds ka precision bacha ke rakho (floor nahi)
-    const minutes = round2(minutesSince(work.lastResumeTime));
+    const minutes = round2(
+      minutesSince(work.lastResumeTime)
+    );
 
-    // Atomic: sirf tab update jab status/lastResumeTime abhi bhi wahi ho
     const updated = await WorkLog.findOneAndUpdate(
-      { _id: work._id, status: "RUNNING", lastResumeTime: work.lastResumeTime },
-      { $set: { status: "PAUSED" }, $inc: { totalMinutes: minutes } },
+      {
+        _id: work._id,
+        ...scopeFilter(req),
+        status: "RUNNING",
+        lastResumeTime: work.lastResumeTime,
+      },
+      {
+        $set: {
+          status: "PAUSED",
+        },
+        $inc: {
+          totalMinutes: minutes,
+        },
+      },
       { new: true }
     );
-    if (!updated) throw httpError("Work was already updated, please refresh", 409);
 
-    res.status(200).json({ success: true, message: "Work paused successfully", work: updated });
+    if (!updated) {
+      throw httpError(
+        "Work was already updated. Please refresh.",
+        409
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Work paused successfully",
+      work: updated,
+    });
   } catch (err) {
-    handleError(res, err, "pauseWork");
+    return handleError(res, err, "pauseWork");
   }
 };
 
-/* ------------------------------ RESUME WORK ------------------------------ */
+// =====================================================
+// RESUME WORK
+// =====================================================
+
 export const resumeWork = async (req, res) => {
   try {
     const work = await getWork(req);
 
     if (work.status !== "PAUSED") {
-      throw httpError("Only paused work can be resumed", 400);
+      throw httpError(
+        "Only paused work can be resumed",
+        400
+      );
     }
 
     const updated = await WorkLog.findOneAndUpdate(
-      { _id: work._id, status: "PAUSED" },
-      { $set: { status: "RUNNING", lastResumeTime: new Date() } },
-      { new: true }
-    );
-    if (!updated) throw httpError("Work was already updated, please refresh", 409);
-
-    res.status(200).json({ success: true, message: "Work resumed successfully", work: updated });
-  } catch (err) {
-    handleError(res, err, "resumeWork");
-  }
-};
-
-/* ------------------------------- STOP WORK ------------------------------- */
-export const stopWork = async (req, res) => {
-  try {
-    const work = await getWork(req);
-
-    if (work.status === "STOPPED") {
-      throw httpError("Work already stopped", 400);
-    }
-
-    const now = new Date();
-    let totalMinutes = work.totalMinutes;
-    const condition = { _id: work._id, status: work.status };
-
-    if (work.status === "RUNNING") {
-      totalMinutes += minutesSince(work.lastResumeTime);
-      condition.lastResumeTime = work.lastResumeTime;
-    }
-
-    totalMinutes = round2(totalMinutes);
-    const totalAmount = Math.ceil((totalMinutes / 60) * work.ratePerHour);
-    const dueAmount = totalAmount - work.paidAmount;
-
-    // Atomic: double-tap pe sirf ek request jeetegi, farmer totals do baar nahi badhenge
-    const updated = await WorkLog.findOneAndUpdate(
-      condition,
+      {
+        _id: work._id,
+        ...scopeFilter(req),
+        status: "PAUSED",
+      },
       {
         $set: {
-          endTime: now,
-          totalMinutes,
-          totalAmount,
-          dueAmount,
-          paymentStatus: getPaymentStatus(dueAmount, work.paidAmount),
-          status: "STOPPED",
+          status: "RUNNING",
+          lastResumeTime: new Date(),
         },
       },
       { new: true }
     );
-    if (!updated) throw httpError("Work was already updated, please refresh", 409);
 
-    await Farmer.updateOne(
-      { _id: updated.farmer },
-      {
-        $inc: {
-          totalWorkMinutes: totalMinutes,
-          totalBilledAmount: totalAmount,
-          totalPaidAmount: updated.paidAmount,
-          totalDueAmount: dueAmount,
-        },
-        $set: { lastWorkDate: now },
-        $addToSet: { works: updated._id },
-      }
-    );
+    if (!updated) {
+      throw httpError(
+        "Work was already updated. Please refresh.",
+        409
+      );
+    }
 
-    res.status(200).json({ success: true, message: "Work stopped successfully", work: updated });
+    return res.status(200).json({
+      success: true,
+      message: "Work resumed successfully",
+      work: updated,
+    });
   } catch (err) {
-    handleError(res, err, "stopWork");
+    return handleError(res, err, "resumeWork");
   }
 };
 
-/* ------------------------------ GET ALL WORKS ---------------------------- */
+// =====================================================
+// STOP WORK
+// =====================================================
+
+export const stopWork = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      const work = await getWork(req, session);
+
+      if (work.status === "STOPPED") {
+        throw httpError(
+          "Work is already stopped",
+          400
+        );
+      }
+
+      const now = new Date();
+
+      let totalMinutes = Number(
+        work.totalMinutes || 0
+      );
+
+      if (work.status === "RUNNING") {
+        totalMinutes += minutesSince(
+          work.lastResumeTime
+        );
+      }
+
+      totalMinutes = round2(totalMinutes);
+
+      const totalAmount = Math.ceil(
+        (totalMinutes / 60) * work.ratePerHour
+      );
+
+      work.totalMinutes = totalMinutes;
+      work.totalAmount = totalAmount;
+      work.endTime = now;
+      work.status = "STOPPED";
+
+      work.dueAmount = Math.max(
+        0,
+        round2(
+          totalAmount - Number(work.paidAmount || 0)
+        )
+      );
+
+      await work.save({ session });
+
+      const advanceResult = await applyFarmerAdvance(
+        work,
+        session
+      );
+
+      const summary = await syncFarmerSummary(
+        work.farmer,
+        work.owner,
+        session
+      );
+
+      result = {
+        work,
+        summary: {
+          workAmount: totalAmount,
+          advanceApplied: advanceResult.applied,
+          remainingDue: advanceResult.remainingDue,
+          remainingAdvance: advanceResult.remainingAdvance,
+          farmerTotalDue: summary.totalDueAmount,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Work stopped successfully. Advance adjusted automatically.",
+      ...result,
+    });
+  } catch (err) {
+    return handleError(res, err, "stopWork");
+  } finally {
+    await session.endSession();
+  }
+};
+
+// =====================================================
+// GET ALL WORKS
+// =====================================================
+
 export const getAllWorks = async (req, res) => {
   try {
     const works = await WorkLog.find(scopeFilter(req))
-      .populate({ path: "farmer", select: "name phone village" })
-      .populate({ path: "workRate", select: "type rate unit" })
+      .populate({
+        path: "farmer",
+        select: "name phone village",
+      })
+      .populate({
+        path: "workRate",
+        select: "type rate unit",
+      })
       .sort({ createdAt: -1 });
 
-    res.status(200).json({ success: true, count: works.length, works });
+    return res.status(200).json({
+      success: true,
+      count: works.length,
+      works,
+    });
   } catch (err) {
-    handleError(res, err, "getAllWorks");
+    return handleError(res, err, "getAllWorks");
   }
 };
 
-/* ------------------------------ WORK DETAILS ----------------------------- */
+// =====================================================
+// WORK DETAILS
+// =====================================================
+
 export const workDetails = async (req, res) => {
   try {
-    if (!isValidId(req.params.id)) throw httpError("Invalid work id", 400);
-
-    const work = await WorkLog.findOne({ _id: req.params.id, ...scopeFilter(req) })
+    const work = await WorkLog.findOne({
+      _id: req.params.id,
+      ...scopeFilter(req),
+    })
       .populate("farmer")
       .populate("workRate");
 
-    if (!work) throw httpError("Work not found", 404);
+    if (!work) {
+      throw httpError("Work not found", 404);
+    }
 
-    res.status(200).json({ success: true, work });
+    return res.status(200).json({
+      success: true,
+      work,
+    });
   } catch (err) {
-    handleError(res, err, "workDetails");
+    return handleError(res, err, "workDetails");
+  }
+};
+
+// =====================================================
+// UPDATE WORK
+// =====================================================
+
+export const updateWork = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      const work = await getWork(req, session);
+
+      if (work.status === "RUNNING") {
+        throw httpError(
+          "Stop the work before editing it",
+          400
+        );
+      }
+
+      const {
+        date,
+        workDate,
+        workType,
+        workRate,
+        ratePerHour,
+        totalMinutes,
+        hours,
+        fieldName,
+      } = req.body;
+
+      const owner = getOwner(req);
+
+      const farmer = await Farmer.findOne({
+        _id: work.farmer,
+        owner,
+      }).session(session);
+
+      if (!farmer) {
+        throw httpError("Farmer not found", 404);
+      }
+
+      // -----------------------------------------
+      // Restore this work's previous advance
+      // allocations before recalculating amount.
+      // -----------------------------------------
+
+      const oldAdvanceApplied = round2(
+        work.advanceAppliedAmount || 0
+      );
+
+      if (oldAdvanceApplied > 0) {
+        await restoreWorkAdvanceAllocations({
+          work,
+          farmer,
+          owner,
+          session,
+        });
+
+        // Remove the restored advance from work's paid
+        // amount. Direct payment remains untouched.
+        work.paidAmount = round2(
+          Number(work.paidAmount || 0) -
+          oldAdvanceApplied
+        );
+
+        work.advanceAppliedAmount = 0;
+
+        if (work.paidAmount < -0.01) {
+          throw httpError(
+            "Invalid work paid amount after restoring advance.",
+            409
+          );
+        }
+
+        work.paidAmount = Math.max(
+          0,
+          work.paidAmount
+        );
+      }
+
+      // -----------------------------------------
+      // Update date and field
+      // -----------------------------------------
+
+      if (
+        date !== undefined ||
+        workDate !== undefined
+      ) {
+        const newDate = new Date(
+          date ?? workDate
+        );
+
+        if (Number.isNaN(newDate.getTime())) {
+          throw httpError("Invalid work date", 400);
+        }
+
+        work.date = newDate;
+      }
+
+      if (fieldName !== undefined) {
+        work.fieldName = fieldName;
+      }
+
+      if (workType !== undefined) {
+        if (
+          typeof workType !== "string" ||
+          !workType.trim()
+        ) {
+          throw httpError("Invalid work type", 400);
+        }
+
+        work.workType = workType.trim();
+      }
+
+      // -----------------------------------------
+      // Update work rate
+      // -----------------------------------------
+
+      if (workRate !== undefined) {
+        const rateDoc = await getRate(
+          workRate,
+          owner,
+          session
+        );
+
+        work.workRate = rateDoc._id;
+        work.ratePerHour = Number(rateDoc.rate);
+
+        if (workType === undefined) {
+          work.workType = rateDoc.type;
+        }
+      }
+
+      if (ratePerHour !== undefined) {
+        const rate = Number(ratePerHour);
+
+        if (!Number.isFinite(rate) || rate < 0) {
+          throw httpError("Invalid hourly rate", 400);
+        }
+
+        work.ratePerHour = rate;
+      }
+
+      // -----------------------------------------
+      // Update duration
+      // -----------------------------------------
+
+      let minutes = Number(
+        work.totalMinutes || 0
+      );
+
+      if (totalMinutes !== undefined) {
+        minutes = Number(totalMinutes);
+      } else if (hours !== undefined) {
+        minutes = Number(hours) * 60;
+      }
+
+      if (!Number.isFinite(minutes) || minutes < 0) {
+        throw httpError(
+          "Invalid work duration",
+          400
+        );
+      }
+
+      work.totalMinutes = round2(minutes);
+
+      const newTotalAmount = Math.ceil(
+        (work.totalMinutes / 60) *
+        Number(work.ratePerHour || 0)
+      );
+
+      // At this point work.paidAmount contains only
+      // direct payment amount, not previous advance.
+      const directPaid = round2(
+        work.paidAmount || 0
+      );
+
+      if (newTotalAmount < directPaid) {
+        throw httpError(
+          `New work amount cannot be less than direct payments already applied (₹${directPaid.toFixed(
+            2
+          )}).`,
+          400
+        );
+      }
+
+      work.totalAmount = newTotalAmount;
+
+      work.dueAmount = Math.max(
+        0,
+        round2(newTotalAmount - directPaid)
+      );
+
+      work.paymentStatus = getPaymentStatus(
+        work.dueAmount,
+        directPaid
+      );
+
+      await work.save({ session });
+
+      // -----------------------------------------
+      // Reapply advance FIFO against new amount
+      // -----------------------------------------
+
+      const advanceResult = await applyFarmerAdvance(
+        work,
+        session
+      );
+
+      const summary = await syncFarmerSummary(
+        work.farmer,
+        owner,
+        session
+      );
+
+      result = {
+        work,
+        summary: {
+          oldAdvanceRestored: oldAdvanceApplied,
+          newAdvanceApplied: advanceResult.applied,
+          remainingAdvance: advanceResult.remainingAdvance,
+          remainingDue: advanceResult.remainingDue,
+          farmerTotalDue: summary.totalDueAmount,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Work updated successfully. Advance allocations recalculated.",
+      ...result,
+    });
+  } catch (err) {
+    return handleError(res, err, "updateWork");
+  } finally {
+    await session.endSession();
+  }
+};
+
+// =====================================================
+// DELETE WORK
+// =====================================================
+
+export const deleteWork = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { id } = req.params;
+    const owner = getOwner(req);
+
+    if (!isValidId(id)) {
+      throw httpError("Invalid work ID", 400);
+    }
+
+    if (!owner) {
+      throw httpError("Unauthorized", 401);
+    }
+
+    let deletedData;
+
+    await session.withTransaction(async () => {
+      const work = await WorkLog.findOne({
+        _id: id,
+        owner,
+      }).session(session);
+
+      if (!work) {
+        throw httpError("Work not found", 404);
+      }
+
+      if (
+        ["RUNNING", "PAUSED"].includes(work.status)
+      ) {
+        throw httpError(
+          "Running or paused work cannot be deleted. Stop it first.",
+          400
+        );
+      }
+
+      const farmer = await Farmer.findOne({
+        _id: work.farmer,
+        owner,
+      }).session(session);
+
+      if (!farmer) {
+        throw httpError("Farmer not found", 404);
+      }
+
+      // -----------------------------------------
+      // Get linked payments
+      // -----------------------------------------
+
+      const payments = await Payment.find({
+        owner,
+        workId: work._id,
+        status: "SUCCESS",
+      }).session(session);
+
+      // -----------------------------------------
+      // Restore advance consumed by this work
+      // -----------------------------------------
+
+      const workAdvance = round2(
+        work.advanceAppliedAmount || 0
+      );
+
+      let restoredWorkAdvance = 0;
+
+      if (workAdvance > 0) {
+        const restoreResult =
+          await restoreWorkAdvanceAllocations({
+            work,
+            farmer,
+            owner,
+            session,
+          });
+
+        restoredWorkAdvance = round2(
+          restoreResult.restoredAmount
+        );
+      }
+
+      // -----------------------------------------
+      // Reverse advance created by linked payments
+      // -----------------------------------------
+
+      let reversedPaymentAdvance = 0;
+
+      for (const payment of payments) {
+        const reversed =
+          await reverseLinkedPaymentAdvance({
+            payment,
+            farmer,
+            owner,
+            session,
+          });
+
+        reversedPaymentAdvance = round2(
+          reversedPaymentAdvance + reversed
+        );
+      }
+
+      // -----------------------------------------
+      // Delete linked payment records
+      // -----------------------------------------
+
+      const paymentResult = await Payment.deleteMany({
+        owner,
+        workId: work._id,
+      }).session(session);
+
+      // -----------------------------------------
+      // Remove work reference from farmer
+      // -----------------------------------------
+
+      await Farmer.updateOne(
+        {
+          _id: farmer._id,
+          owner,
+        },
+        {
+          $pull: {
+            works: work._id,
+          },
+        },
+        { session }
+      );
+
+      // -----------------------------------------
+      // Delete work
+      // -----------------------------------------
+
+      const workResult = await WorkLog.deleteOne({
+        _id: work._id,
+        owner,
+      }).session(session);
+
+      if (workResult.deletedCount !== 1) {
+        throw httpError(
+          "Work deletion failed",
+          500
+        );
+      }
+
+      // -----------------------------------------
+      // Recalculate farmer summary
+      // -----------------------------------------
+
+      const summary = await syncFarmerSummary(
+        farmer._id,
+        owner,
+        session
+      );
+
+      deletedData = {
+        workId: work._id,
+        farmerId: farmer._id,
+
+        deletedPayments: paymentResult.deletedCount,
+
+        restoredWorkAdvance,
+        reversedPaymentAdvance,
+
+        netAdvanceChange: round2(
+          restoredWorkAdvance -
+          reversedPaymentAdvance
+        ),
+
+        remainingAdvance: round2(
+          farmer.advanceAmount
+        ),
+
+        summary,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Work and linked payments deleted successfully.",
+      deleted: deletedData,
+    });
+  } catch (error) {
+    return handleError(res, error, "deleteWork");
+  } finally {
+    await session.endSession();
+  }
+};
+
+// =====================================================
+// CANCEL WORK
+// =====================================================
+
+export const cancelWork = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      const work = await getWork(req, session);
+
+      // Only running or paused work can be cancelled
+      if (!["RUNNING", "PAUSED"].includes(work.status)) {
+        throw httpError(
+          `Cannot cancel work with ${work.status} status`,
+          400
+        );
+      }
+
+      const now = new Date();
+
+      let totalMinutes = Number(work.totalMinutes || 0);
+
+      // Preserve elapsed time if work is currently running
+      if (work.status === "RUNNING") {
+        totalMinutes += minutesSince(work.lastResumeTime);
+      }
+
+      totalMinutes = round2(totalMinutes);
+
+      work.totalMinutes = totalMinutes;
+      work.endTime = now;
+      work.lastResumeTime = null;
+      work.status = "CANCELLED";
+
+      // Important:
+      // Do not calculate totalAmount.
+      // Do not apply farmer advance.
+      // Do not modify payment or accounting records.
+
+      await work.save({ session });
+
+      result = work;
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Work cancelled successfully",
+      data: result,
+    });
+  } catch (err) {
+    return handleError(res, err, "cancelWork");
+  } finally {
+    await session.endSession();
   }
 };

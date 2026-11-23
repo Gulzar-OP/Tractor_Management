@@ -12,7 +12,7 @@ export const getCurrentUser = createAsyncThunk(
         withCredentials: true,
       });
 
-      console.log("API RESPONSE:", res.data);
+      // console.log("API RESPONSE:", res.data);
 
       return res.data.user; // Direct user object return
     } catch (err) {

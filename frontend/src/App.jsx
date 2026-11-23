@@ -26,6 +26,7 @@ import Drivers from "./features/drivers/Drivers";
 import Intro from './Home/Intro'
 import DateWiseReport from "./features/Reports/DateWiseReport";
 import Works from "./features/Works/Works";
+import PaymentRecords from "./features/Payment/PaymentRecords";
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -65,6 +66,10 @@ export default function App() {
 
                   <Route path="/expenses" element={<Expenses />} />
                   <Route path="/drivers" element={<Drivers />} />
+                  <Route
+  path="/payment-records"
+  element={<PaymentRecords />}
+/>
                   {/* <Route path="/reports" element={<Reports />} /> */}
                   <Route path="/reports" element={<DateWiseReport />} />
                   <Route path="/settings" element={<Settings />} />

@@ -280,32 +280,46 @@ export default function Farmers() {
   );
 
   // Delete farmer
-  const handleDelete = async (e, farmerId, farmerName) => {
-    e.stopPropagation();
 
-    const confirmed = window.confirm(
-      `Delete ${farmerName || "this farmer"}? This can't be undone.`
+const handleDelete = async (e, farmerId, farmerName) => {
+  e.stopPropagation();
+
+  const confirmed = window.confirm(
+    `Permanently delete ${farmerName || "this farmer"} and all related works and payments? This action cannot be undone.`
+  );
+
+  if (!confirmed) return;
+
+  setDeletingId(farmerId);
+  setError(null);
+
+  try {
+    const response = await axios.delete(
+      DELETE_FARMER_URL(farmerId),
+      {
+        withCredentials: true,
+      }
     );
 
-    if (!confirmed) return;
+    setData((prev) =>
+      prev.filter((farmer) => farmer._id !== farmerId)
+    );
 
-    setDeletingId(farmerId);
+  } catch (err) {
+    console.error(
+      "Error deleting farmer:",
+      err.response?.data || err
+    );
 
-    try {
-      await axios.delete(DELETE_FARMER_URL(farmerId), {
-        withCredentials: true,
-      });
+    setError(
+      err.response?.data?.message ||
+      "Couldn't delete farmer. Please try again."
+    );
+  } finally {
+    setDeletingId(null);
+  }
+};
 
-      setData((prev) =>
-        prev.filter((farmer) => farmer._id !== farmerId)
-      );
-    } catch (err) {
-      console.error("Error deleting farmer:", err);
-      setError("Couldn't delete that farmer. Please try again.");
-    } finally {
-      setDeletingId(null);
-    }
-  };
 
   // Auth loading
   if (authLoading) {

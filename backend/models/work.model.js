@@ -47,7 +47,7 @@ const workSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["RUNNING", "PAUSED", "STOPPED", "IDLE"],
+      enum: ["RUNNING", "PAUSED", "STOPPED", "IDLE", "CANCELLED"],
       default: "RUNNING",
       index: true,
     },
@@ -72,10 +72,26 @@ const workSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    appliedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    advanceAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
 
     paidAmount: {
       type: Number,
       default: 0,
+    },
+    advanceAppliedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     dueAmount: {

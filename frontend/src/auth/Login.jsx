@@ -17,7 +17,7 @@ import { getCurrentUser } from "../redux/slice/authSlice";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 const API = `${API_BASE}/api`;
-
+console.log("API Base URL:", API_BASE);
 const features = [
   { icon: FaUsers, text: "Kisan aur driver ka poora hisaab ek jagah" },
   { icon: FaTractor, text: "Kaam start, pause aur stop, timer ke saath" },

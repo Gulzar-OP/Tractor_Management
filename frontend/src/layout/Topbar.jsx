@@ -72,10 +72,18 @@ export default function Topbar({ setMobileOpen, onSelectFarmer }) {
     setError(null);
 
     try {
-      const res = await axios.get(`${API_BASE}/api/farmer/search`, {
-        params: { query: q },
-        signal: controller.signal,
-      });
+      const res = await axios.get(
+  `${API_BASE}/api/farmer/search`,
+  {
+    params: { query: q },
+    withCredentials: true,
+  }
+);
+      // const res = await axios.get(`${API_BASE}/api/farmer/search`, {
+      //   params: { query: q },
+      //   signal: controller.signal,
+      // });
+      console.log("Farmer search response:", res.data);
 
       const data = res?.data?.farmers || res?.data?.data || res?.data || [];
       setResults(Array.isArray(data) ? data : []);
@@ -198,24 +206,6 @@ export default function Topbar({ setMobileOpen, onSelectFarmer }) {
     if (farmer?._id) navigate(`/farmers/${farmer._id}`);
   };
 
-  const handleLogout = async () => {
-    try {
-      await axios.post(
-        `${API_BASE}/api/auth/logout`,
-        {},
-        { withCredentials: true }
-      );
-    } catch (err) {
-      console.error("Logout request failed:", err);
-    } finally {
-      dispatch(logoutUser());
-      navigate("/auth");
-    }
-  };
-
-  const profileInitial = userData?.name?.charAt(0)?.toUpperCase?.() || "U";
-  const isDriver = role === "driver";
-  const isLoggedIn = Boolean(user);
 
   // Still resolving the session — render a quiet placeholder instead of
   // popping the header in once auth settles.

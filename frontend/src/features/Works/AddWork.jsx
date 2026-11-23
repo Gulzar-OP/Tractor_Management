@@ -1,5 +1,10 @@
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import axios from "axios";
 import { toast } from "react-hot-toast";
 import {
@@ -18,7 +23,10 @@ import {
   MapPin,
   Sprout,
   Calculator,
-  Mic,
+  Banknote,
+  RefreshCw,
+  Receipt,
+  XCircle,
 } from "lucide-react";
 import { IoMicOutline } from "react-icons/io5";
 import { FiMicOff } from "react-icons/fi";
@@ -35,21 +43,99 @@ const API_BASE =
 const API = `${API_BASE}/api`;
 
 const formatCurrency = (amount) =>
-  `₹${Number(amount || 0).toLocaleString("en-IN")}`;
+  `₹${Number(amount || 0).toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+  })}`;
+
+const getLocalDate = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
 
 function buildStartTime(dateStr) {
   const now = new Date();
-  const [y, m, d] = dateStr.split("-").map(Number);
+  const [year, month, day] = dateStr.split("-").map(Number);
 
   return new Date(
-    y,
-    (m || 1) - 1,
-    d || 1,
+    year,
+    month - 1,
+    day,
     now.getHours(),
     now.getMinutes(),
     now.getSeconds()
   ).toISOString();
 }
+
+function getWorkDue(work) {
+  if (!work) return 0;
+
+  if (work.dueAmount !== undefined && work.dueAmount !== null) {
+    return Math.max(0, Number(work.dueAmount));
+  }
+
+  const total = Number(work.totalAmount || 0);
+  const paid = Number(work.paidAmount || 0);
+
+  return Math.max(0, total - paid);
+}
+
+function getWorkAdvance(work) {
+  return Math.max(
+    0,
+    Number(work?.advanceAppliedAmount || 0)
+  );
+}
+
+/* --------------------------------------------------
+   SMALL COMPONENTS
+-------------------------------------------------- */
+
+function SummaryTile({ label, value, icon: Icon, tone = "slate" }) {
+  const tones = {
+    slate: "bg-slate-50 text-slate-800",
+    emerald: "bg-emerald-50 text-emerald-700",
+    rose: "bg-rose-50 text-rose-700",
+    amber: "bg-amber-50 text-amber-700",
+    blue: "bg-blue-50 text-blue-700",
+  };
+
+  return (
+    <div className={`rounded-2xl p-4 ${tones[tone]}`}>
+      <div className="flex items-center gap-2 text-xs font-medium opacity-75">
+        <Icon size={15} />
+        {label}
+      </div>
+
+      <p className="mt-2 break-words text-xl font-bold tabular-nums">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function SectionHeading({ icon: Icon, title, subtitle }) {
+  return (
+    <div className="mb-4 flex items-center gap-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+        <Icon size={19} />
+      </div>
+
+      <div>
+        <h3 className="font-semibold text-slate-800">{title}</h3>
+        {subtitle && (
+          <p className="text-xs text-slate-500">{subtitle}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------------------------
+   MAIN PAGE
+-------------------------------------------------- */
 
 export default function AddWork() {
   const navigate = useNavigate();
@@ -61,6 +147,7 @@ export default function AddWork() {
   const [optionsError, setOptionsError] = useState(null);
 
   const [submitting, setSubmitting] = useState(false);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [listening, setListening] = useState(false);
 
   const recognitionRef = useRef(null);
@@ -70,87 +157,84 @@ export default function AddWork() {
     fieldName: "",
     workType: "",
     totalMinutes: "",
-    paidAmount: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: getLocalDate(),
   });
 
-  // --------------------------------------------------
-  // LOAD FARMERS AND WORK RATES
-  // --------------------------------------------------
+  // Newly created work record.
+  const [createdWork, setCreatedWork] = useState(null);
+
+  // Payment form appears after work creation.
+  const [paymentForm, setPaymentForm] = useState({
+    amount: "",
+    paymentMethod: "CASH",
+    note: "",
+  });
+
+  const [paymentCompleted, setPaymentCompleted] = useState(false);
+  const [paymentResult, setPaymentResult] = useState(null);
+
+  /* --------------------------------------------------
+     LOAD FARMERS AND RATES
+  -------------------------------------------------- */
+
+  const loadOptions = async () => {
+    try {
+      setLoadingOptions(true);
+      setOptionsError(null);
+
+      const [farmersRes, ratesRes] = await Promise.all([
+        axios.post(
+          `${API}/farmer/all-farmer`,
+          {},
+          { withCredentials: true }
+        ),
+
+        axios.get(`${API}/rate/rates`, {
+          withCredentials: true,
+        }),
+      ]);
+
+      const farmerList =
+        farmersRes.data?.all ||
+        farmersRes.data?.farmers ||
+        [];
+
+      const rateList = ratesRes.data?.rates || [];
+
+      setFarmers(farmerList);
+      setRates(rateList);
+
+      setForm((prev) => ({
+        ...prev,
+        farmer: prev.farmer || farmerList[0]?._id || "",
+        workType: prev.workType || rateList[0]?.type || "",
+      }));
+    } catch (err) {
+      console.error(
+        "Failed to load options:",
+        err.response?.data || err.message
+      );
+
+      setOptionsError("Couldn't load farmers or work rates.");
+      toast.error("Failed to load farmers or work rates");
+    } finally {
+      setLoadingOptions(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadOptions() {
-      try {
-        setLoadingOptions(true);
-        setOptionsError(null);
-
-        const [farmersRes, ratesRes] = await Promise.all([
-          axios.post(
-            `${API}/farmer/all-farmer`,
-            {},
-            { withCredentials: true }
-          ),
-          axios.get(`${API}/rate/rates`, {
-            withCredentials: true,
-          }),
-        ]);
-
-        if (cancelled) return;
-
-        const farmerList =
-          farmersRes.data?.all ||
-          farmersRes.data?.farmers ||
-          [];
-
-        const rateList = ratesRes.data?.rates || [];
-
-        setFarmers(farmerList);
-        setRates(rateList);
-
-        setForm((prev) => ({
-          ...prev,
-          farmer: prev.farmer || farmerList[0]?._id || "",
-          workType: prev.workType || rateList[0]?.type || "",
-        }));
-      } catch (err) {
-        console.error(
-          "Failed to load farmers/rates:",
-          err.response?.data || err.message
-        );
-
-        if (!cancelled) {
-          setOptionsError(
-            "Couldn't load farmers or work rates."
-          );
-
-          toast.error("Failed to load farmers or work rates");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingOptions(false);
-        }
-      }
-    }
-
     loadOptions();
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
-  // Stop voice recognition when component unmounts
   useEffect(() => {
     return () => {
       recognitionRef.current?.abort();
     };
   }, []);
 
-  // --------------------------------------------------
-  // SELECTED FARMER
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     SELECTED FARMER
+  -------------------------------------------------- */
 
   const selectedFarmer = useMemo(
     () =>
@@ -160,7 +244,6 @@ export default function AddWork() {
     [farmers, form.farmer]
   );
 
-  // Farmer's existing financial information
   const farmerBilled = Number(
     selectedFarmer?.totalBilledAmount || 0
   );
@@ -186,9 +269,9 @@ export default function AddWork() {
         ? "Advance"
         : "Paid";
 
-  // --------------------------------------------------
-  // WORK RATE CALCULATION
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     WORK CALCULATION
+  -------------------------------------------------- */
 
   const selectedRate = useMemo(
     () =>
@@ -210,26 +293,33 @@ export default function AddWork() {
     return Math.ceil((minutes / 60) * ratePerHour);
   }, [form.totalMinutes, ratePerHour]);
 
-  const enteredPaidAmount = Number(form.paidAmount || 0);
+  /* --------------------------------------------------
+     CREATED WORK / PAYMENT CALCULATION
+  -------------------------------------------------- */
 
-  const dueAmount = Math.max(
-    calculatedAmount - enteredPaidAmount,
-    0
+  const workDue = getWorkDue(createdWork);
+
+  const workTotal = Number(
+    createdWork?.totalAmount || calculatedAmount || 0
   );
 
-  const extraPayment = Math.max(
-    enteredPaidAmount - calculatedAmount,
-    0
+  const workAdvance = getWorkAdvance(createdWork);
+
+  const enteredPayment = Number(paymentForm.amount || 0);
+
+  const paymentRemaining = Math.max(
+    0,
+    workDue - enteredPayment
   );
 
-  const paidRatio =
-    calculatedAmount > 0
-      ? Math.min(enteredPaidAmount / calculatedAmount, 1)
-      : 0;
+  const paymentExcess = Math.max(
+    0,
+    enteredPayment - workDue
+  );
 
-  // --------------------------------------------------
-  // FORM HANDLERS
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     FORM HANDLERS
+  -------------------------------------------------- */
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -240,29 +330,38 @@ export default function AddWork() {
     }));
   };
 
-  // --------------------------------------------------
-  // VOICE INPUT
-  // --------------------------------------------------
+  const handlePaymentChange = (e) => {
+    const { name, value } = e.target;
+
+    setPaymentForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  /* --------------------------------------------------
+     VOICE INPUT
+  -------------------------------------------------- */
 
   const parseVoiceText = (text) => {
-    const KEYWORDS =
-      "किसान|फार्मर|फील्ड|खेत|वर्क टाइप|काम|मिनट|टाइम|पेड|भुगतान|पेमेंट|डेट|तारीख";
+    const keywords =
+      "किसान|फार्मर|फील्ड|खेत|वर्क टाइप|काम|मिनट|टाइम|डेट|तारीख";
 
     const farmerMatch = text.match(
       new RegExp(
-        `(?:किसान|फार्मर)\\s+(.+?)(?=\\s*(?:${KEYWORDS}|$))`
+        `(?:किसान|फार्मर)\\s+(.+?)(?=\\s*(?:${keywords}|$))`
       )
     );
 
     const fieldMatch = text.match(
       new RegExp(
-        `(?:फील्ड|खेत)\\s+(.+?)(?=\\s*(?:${KEYWORDS}|$))`
+        `(?:फील्ड|खेत)\\s+(.+?)(?=\\s*(?:${keywords}|$))`
       )
     );
 
     const workTypeMatch = text.match(
       new RegExp(
-        `(?:वर्क टाइप|काम)\\s+(.+?)(?=\\s*(?:${KEYWORDS}|$))`
+        `(?:वर्क टाइप|काम)\\s+(.+?)(?=\\s*(?:${keywords}|$))`
       )
     );
 
@@ -270,25 +369,19 @@ export default function AddWork() {
       text.match(/(\d+)\s*(?:मिनट|टाइम)/) ||
       text.match(/(?:मिनट|टाइम)\s*(\d+)/);
 
-    const paidMatch =
-      text.match(
-        /(\d+)\s*(?:रुपये|रुपए)?\s*(?:पेड|भुगतान|पेमेंट)/
-      ) ||
-      text.match(/(?:पेड|भुगतान|पेमेंट)\s*(\d+)/);
-
     const isToday = /आज/.test(text);
     const isTomorrow = /कल/.test(text);
 
     let date;
 
     if (isToday) {
-      date = new Date().toISOString().slice(0, 10);
+      date = getLocalDate();
     }
 
     if (isTomorrow) {
-      const d = new Date();
-      d.setDate(d.getDate() + 1);
-      date = d.toISOString().slice(0, 10);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      date = getLocalDate(tomorrow);
     }
 
     return {
@@ -296,7 +389,6 @@ export default function AddWork() {
       fieldName: fieldMatch?.[1]?.trim() || "",
       workType: workTypeMatch?.[1]?.trim() || "",
       totalMinutes: minutesMatch?.[1] || "",
-      paidAmount: paidMatch?.[1] || "",
       date,
     };
   };
@@ -330,7 +422,6 @@ export default function AddWork() {
 
     recognition.onresult = (event) => {
       const spokenText = event.results[0][0].transcript;
-
       const parsed = parseVoiceText(spokenText);
 
       setForm((prev) => {
@@ -344,24 +435,20 @@ export default function AddWork() {
           next.totalMinutes = parsed.totalMinutes;
         }
 
-        if (parsed.paidAmount) {
-          next.paidAmount = parsed.paidAmount;
-        }
-
         if (parsed.date) {
           next.date = parsed.date;
         }
 
         if (parsed.workType) {
-          const matchedRate = rates.find(
-            (rate) =>
-              rate.type.toLowerCase().includes(
-                parsed.workType.toLowerCase()
-              ) ||
-              parsed.workType
-                .toLowerCase()
-                .includes(rate.type.toLowerCase())
-          );
+          const matchedRate = rates.find((rate) => {
+            const rateType = rate.type.toLowerCase();
+            const spoken = parsed.workType.toLowerCase();
+
+            return (
+              rateType.includes(spoken) ||
+              spoken.includes(rateType)
+            );
+          });
 
           if (matchedRate) {
             next.workType = matchedRate.type;
@@ -385,7 +472,7 @@ export default function AddWork() {
           }));
         } else {
           toast.error(
-            `Farmer "${parsed.farmerName}" not found in list`
+            `Farmer "${parsed.farmerName}" not found`
           );
         }
       }
@@ -408,9 +495,32 @@ export default function AddWork() {
     recognition.start();
   };
 
-  // --------------------------------------------------
-  // SUBMIT WORK
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     RESET AFTER WORK
+  -------------------------------------------------- */
+
+  const resetWorkForm = () => {
+    setCreatedWork(null);
+    setPaymentCompleted(false);
+    setPaymentResult(null);
+
+    setPaymentForm({
+      amount: "",
+      paymentMethod: "CASH",
+      note: "",
+    });
+
+    setForm((prev) => ({
+      ...prev,
+      fieldName: "",
+      totalMinutes: "",
+      date: getLocalDate(),
+    }));
+  };
+
+  /* --------------------------------------------------
+     CREATE WORK
+  -------------------------------------------------- */
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -429,33 +539,34 @@ export default function AddWork() {
 
     if (
       !form.totalMinutes ||
+      !Number.isFinite(Number(form.totalMinutes)) ||
       Number(form.totalMinutes) <= 0
     ) {
-      return toast.error("Total minutes is required");
+      return toast.error("Enter valid work minutes");
     }
 
     if (!selectedRate) {
       return toast.error(
-        `No rate set for "${form.workType}" — add one in Settings first`
+        `No rate set for "${form.workType}"`
       );
     }
 
-    if (enteredPaidAmount < 0) {
-      return toast.error("Paid amount cannot be negative");
+    if (!form.date) {
+      return toast.error("Please select work date");
     }
 
     try {
       setSubmitting(true);
 
-      // Keep the existing backend API contract unchanged.
+      // Payment is deliberately recorded separately.
       const payload = {
         farmerId: form.farmer,
-        fieldName: form.fieldName,
+        fieldName: form.fieldName.trim(),
         workType: form.workType,
         workRate: selectedRate._id,
         startTime: buildStartTime(form.date),
-        totalMinutes: Number(form.totalMinutes || 0),
-        paidAmount: Number(form.paidAmount || 0),
+        totalMinutes: Number(form.totalMinutes),
+        paidAmount: 0,
         date: form.date,
       };
 
@@ -465,34 +576,60 @@ export default function AddWork() {
         { withCredentials: true }
       );
 
+      const work = res.data?.work || res.data?.data?.work;
+
+      if (!work?._id) {
+        toast.error(
+          "Work may have been created, but its ID was not returned. Check the work records before retrying."
+        );
+        return;
+      }
+
+      setCreatedWork({
+        ...work,
+        farmerID: work.farmerID || form.farmer,
+        totalAmount: Number(
+          work.totalAmount ?? calculatedAmount
+        ),
+      });
+
+      setPaymentCompleted(false);
+      setPaymentResult(null);
+
+      // Default payment amount is the remaining due
+      // AFTER backend has applied available farmer advance.
+      const due = getWorkDue({
+        ...work,
+        totalAmount: work.totalAmount ?? calculatedAmount,
+      });
+
+      setPaymentForm({
+        amount: due > 0 ? String(due) : "",
+        paymentMethod: "CASH",
+        note: "",
+      });
+
       toast.success(
-        res.data?.message ||
-          "Work record added successfully"
+        res.data?.message || "Work created successfully"
       );
 
-      setForm((prev) => ({
-        ...prev,
-        fieldName: "",
-        workType: rates[0]?.type || "",
-        totalMinutes: "",
-        paidAmount: "",
-        date: new Date().toISOString().slice(0, 10),
-      }));
+      // Refresh farmer data to reflect advance/due changes.
+      try {
+        const farmersRes = await axios.post(
+          `${API}/farmer/all-farmer`,
+          {},
+          { withCredentials: true }
+        );
 
-      // Refresh farmer information so the latest advance/due
-      // is visible when the same farmer is selected again.
-      const farmersRes = await axios.post(
-        `${API}/farmer/all-farmer`,
-        {},
-        { withCredentials: true }
-      );
+        const updatedFarmers =
+          farmersRes.data?.all ||
+          farmersRes.data?.farmers ||
+          [];
 
-      const updatedFarmers =
-        farmersRes.data?.all ||
-        farmersRes.data?.farmers ||
-        [];
-
-      setFarmers(updatedFarmers);
+        setFarmers(updatedFarmers);
+      } catch (refreshError) {
+        console.error("Farmer refresh failed:", refreshError);
+      }
     } catch (err) {
       console.error(
         "Add work failed:",
@@ -508,30 +645,141 @@ export default function AddWork() {
     }
   };
 
-  // --------------------------------------------------
-  // UI
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     RECORD PAYMENT FOR JUST CREATED WORK
+  -------------------------------------------------- */
+
+  const handlePaymentSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!createdWork?._id) {
+      return toast.error("Work record not found");
+    }
+
+    if (paymentCompleted) {
+      return toast.error("Payment has already been recorded");
+    }
+
+    if (!Number.isFinite(enteredPayment) || enteredPayment <= 0) {
+      return toast.error("Enter a valid payment amount");
+    }
+
+    // The payment endpoint requires driverID.
+    const driverID =
+      createdWork.driverID ||
+      createdWork.createdBy;
+
+    if (!driverID) {
+      return toast.error(
+        "Driver ID is missing from the created work. Check the work/add response."
+      );
+    }
+
+    try {
+      setPaymentSubmitting(true);
+
+      const payload = {
+        driverID,
+        workId: createdWork._id,
+        amount: enteredPayment,
+        paymentMethod: paymentForm.paymentMethod,
+        note: paymentForm.note.trim(),
+      };
+
+      const res = await axios.post(
+        `${API}/payment`,
+        payload,
+        { withCredentials: true }
+      );
+
+      const summary = res.data?.summary || {};
+      const updatedWork = res.data?.work;
+
+      setCreatedWork((prev) => ({
+        ...prev,
+        ...(updatedWork || {}),
+        _id: prev._id,
+      }));
+
+      setPaymentResult({
+        amount: enteredPayment,
+        appliedAmount: Number(summary.appliedAmount || 0),
+        advanceAmount: Number(summary.advanceAmount || 0),
+        remainingDue: Number(
+          summary.remainingDue ??
+          updatedWork?.dueAmount ??
+          0
+        ),
+        remainingAdvance: Number(
+          summary.remainingAdvance ?? 0
+        ),
+        paymentStatus: summary.paymentStatus || "SUCCESS",
+        paymentMethod: paymentForm.paymentMethod,
+      });
+
+      setPaymentCompleted(true);
+
+      toast.success(
+        res.data?.message || "Payment recorded successfully"
+      );
+
+      // Refresh farmer summary.
+      try {
+        const farmersRes = await axios.post(
+          `${API}/farmer/all-farmer`,
+          {},
+          { withCredentials: true }
+        );
+
+        const updatedFarmers =
+          farmersRes.data?.all ||
+          farmersRes.data?.farmers ||
+          [];
+
+        setFarmers(updatedFarmers);
+      } catch (refreshError) {
+        console.error("Farmer refresh failed:", refreshError);
+      }
+    } catch (err) {
+      console.error(
+        "Payment failed:",
+        err.response?.data || err.message
+      );
+
+      toast.error(
+        err.response?.data?.message ||
+          "Failed to record payment"
+      );
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
+  /* --------------------------------------------------
+     UI
+  -------------------------------------------------- */
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-6xl">
 
         {/* HEADER */}
+
         <div className="mb-6 rounded-3xl border border-white/70 bg-white/80 p-5 shadow-[0_10px_40px_rgba(15,23,42,0.07)] backdrop-blur-xl">
           <PageHeader
             title="Add Work Record"
-            subtitle="Create a new tractor work entry and manage payment details"
+            subtitle="Create work and record payment immediately"
             action={
-              <div className="flex items-center gap-3">
-
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={startListening}
+                  disabled={!!createdWork}
                   className={`flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-semibold transition ${
                     listening
                       ? "border-red-200 bg-red-50 text-red-600"
                       : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                  }`}
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   {listening ? (
                     <FiMicOff size={18} />
@@ -556,9 +804,10 @@ export default function AddWork() {
         </div>
 
         {/* VOICE STATUS */}
+
         {listening && (
           <div className="mb-5 flex items-center gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-            <Mic size={18} className="animate-pulse" />
+            <IoMicOutline size={19} className="animate-pulse" />
             Listening... Speak your work details in Hindi.
           </div>
         )}
@@ -587,9 +836,10 @@ export default function AddWork() {
               </p>
 
               <button
-                onClick={() => window.location.reload()}
+                onClick={loadOptions}
                 className="rounded-xl bg-slate-800 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-700"
               >
+                <RefreshCw size={15} className="mr-2 inline" />
                 Retry
               </button>
             </div>
@@ -602,8 +852,7 @@ export default function AddWork() {
               </h3>
 
               <p className="max-w-sm text-sm text-slate-500">
-                Add at least one work rate in Settings before
-                creating a work record.
+                Add at least one work rate in Settings before creating a work record.
               </p>
 
               <PrimaryButton
@@ -613,474 +862,669 @@ export default function AddWork() {
               </PrimaryButton>
             </div>
           ) : (
-            <form onSubmit={handleSubmit}>
+            <>
+              {/* WORK FORM */}
 
-              {/* FORM HEADING */}
-              <div className="border-b border-slate-100 bg-gradient-to-r from-emerald-50/80 to-white px-6 py-5">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
-                    <Sprout size={21} />
-                  </div>
-
-                  <div>
-                    <h2 className="font-bold text-slate-900">
-                      Work Information
-                    </h2>
-
-                    <p className="text-xs text-slate-500">
-                      Enter farmer, field and work details
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-7 p-5 sm:p-7">
-
-                {/* FARMER SELECTION */}
-                <section>
-                  <div className="mb-4 flex items-center gap-2">
-                    <UserRound
-                      size={18}
-                      className="text-emerald-600"
+              {!createdWork && (
+                <form onSubmit={handleSubmit}>
+                  <div className="border-b border-slate-100 bg-gradient-to-r from-emerald-50/80 to-white px-6 py-5">
+                    <SectionHeading
+                      icon={Sprout}
+                      title="Work Information"
+                      subtitle="Enter farmer, field and work details"
                     />
-
-                    <h3 className="font-semibold text-slate-800">
-                      Farmer Details
-                    </h3>
                   </div>
 
-                  <Field label="Select Farmer">
-                    <div className="relative">
-                      <UserRound className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <div className="space-y-7 p-5 sm:p-7">
 
-                      <select
-                        name="farmer"
-                        value={form.farmer}
-                        onChange={handleChange}
-                        required
-                        className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                      >
-                        <option value="">
-                          Select farmer
-                        </option>
+                    {/* FARMER */}
 
-                        {farmers.map((farmer) => (
-                          <option
-                            key={farmer._id}
-                            value={farmer._id}
+                    <section>
+                      <SectionHeading
+                        icon={UserRound}
+                        title="Farmer Details"
+                      />
+
+                      <Field label="Select Farmer">
+                        <div className="relative">
+                          <UserRound className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                          <select
+                            name="farmer"
+                            value={form.farmer}
+                            onChange={handleChange}
+                            required
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                           >
-                            {farmer.name}
-                            {farmer.village
-                              ? ` (${farmer.village})`
-                              : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </Field>
+                            <option value="">
+                              Select farmer
+                            </option>
 
-                  {/* SELECTED FARMER FINANCIAL SUMMARY */}
-                  {selectedFarmer ? (
-                    <div className="mt-5 overflow-hidden rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-amber-50">
-
-                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100 px-5 py-4">
-
-                        <div>
-                          <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                            Selected Farmer
-                          </p>
-
-                          <h3 className="mt-1 text-lg font-bold text-slate-900">
-                            {selectedFarmer.name}
-                          </h3>
-
-                          <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
-                            <MapPin size={12} />
-                            {selectedFarmer.village || "Village not available"}
-                          </p>
+                            {farmers.map((farmer) => (
+                              <option
+                                key={farmer._id}
+                                value={farmer._id}
+                              >
+                                {farmer.name}
+                                {farmer.village
+                                  ? ` (${farmer.village})`
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
                         </div>
+                      </Field>
 
-                        <span
-                          className={`rounded-full px-3 py-1.5 text-xs font-bold ${
-                            farmerStatus === "Advance"
-                              ? "bg-amber-100 text-amber-700"
-                              : farmerStatus === "Due"
-                                ? "bg-rose-100 text-rose-700"
-                                : farmerStatus === "Partial"
-                                  ? "bg-orange-100 text-orange-700"
-                                  : "bg-emerald-100 text-emerald-700"
-                          }`}
-                        >
-                          {farmerStatus} Account
-                        </span>
-                      </div>
+                      {selectedFarmer && (
+                        <div className="mt-5 overflow-hidden rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-amber-50">
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100 px-5 py-4">
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                                Selected Farmer
+                              </p>
 
-                      <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4">
+                              <h3 className="mt-1 text-lg font-bold text-slate-900">
+                                {selectedFarmer.name}
+                              </h3>
 
-                        {/* BILLED */}
-                        <div className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
-                          <p className="text-xs text-slate-400">
-                            Total Billed
-                          </p>
+                              <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
+                                <MapPin size={12} />
+                                {selectedFarmer.village || "Village not available"}
+                              </p>
+                            </div>
 
-                          <p className="mt-2 text-lg font-bold text-slate-800">
-                            {formatCurrency(farmerBilled)}
-                          </p>
-                        </div>
+                            <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-700">
+                              {farmerStatus} Account
+                            </span>
+                          </div>
 
-                        {/* PAID */}
-                        <div className="rounded-2xl border border-emerald-100 bg-white p-3 shadow-sm">
-                          <p className="text-xs text-slate-400">
-                            Total Paid
-                          </p>
-
-                          <p className="mt-2 text-lg font-bold text-emerald-600">
-                            {formatCurrency(farmerPaid)}
-                          </p>
-                        </div>
-
-                        {/* DUE */}
-                        <div className="rounded-2xl border border-rose-100 bg-white p-3 shadow-sm">
-                          <p className="text-xs text-slate-400">
-                            Remaining Due
-                          </p>
-
-                          <p className="mt-2 text-lg font-bold text-rose-600">
-                            {formatCurrency(farmerDue)}
-                          </p>
-                        </div>
-
-                        {/* ADVANCE */}
-                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 shadow-sm">
-                          <div className="flex items-center gap-1">
-                            <Wallet
-                              size={13}
-                              className="text-amber-600"
+                          <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4">
+                            <SummaryTile
+                              label="Total Billed"
+                              value={formatCurrency(farmerBilled)}
+                              icon={Receipt}
+                              tone="slate"
                             />
 
-                            <p className="text-xs font-semibold text-amber-700">
-                              Advance
-                            </p>
+                            <SummaryTile
+                              label="Total Settled"
+                              value={formatCurrency(farmerPaid)}
+                              icon={CheckCircle2}
+                              tone="emerald"
+                            />
+
+                            <SummaryTile
+                              label="Remaining Due"
+                              value={formatCurrency(farmerDue)}
+                              icon={AlertCircle}
+                              tone="rose"
+                            />
+
+                            <SummaryTile
+                              label="Available Advance"
+                              value={formatCurrency(farmerAdvance)}
+                              icon={Wallet}
+                              tone="amber"
+                            />
                           </div>
 
-                          <p className="mt-2 text-lg font-bold text-amber-700">
-                            {formatCurrency(farmerAdvance)}
-                          </p>
-                        </div>
-                      </div>
+                          {farmerAdvance > 0 && (
+                            <div className="mx-4 mb-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50/80 p-3">
+                              <Wallet
+                                size={17}
+                                className="mt-0.5 shrink-0 text-amber-600"
+                              />
 
-                      {/* ADVANCE NOTICE */}
-                      {farmerAdvance > 0 && (
-                        <div className="mx-4 mb-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50/80 p-3">
-                          <Wallet
-                            size={17}
-                            className="mt-0.5 shrink-0 text-amber-600"
-                          />
+                              <div>
+                                <p className="text-sm font-semibold text-amber-800">
+                                  Advance Available
+                                </p>
 
-                          <div>
-                            <p className="text-sm font-semibold text-amber-800">
-                              Advance Balance Available
-                            </p>
-
-                            <p className="mt-0.5 text-xs leading-relaxed text-amber-700">
-                              This farmer has {formatCurrency(farmerAdvance)}
-                              {" "}in advance. It is shown separately and
-                              will not be automatically deducted from this
-                              work by this form.
-                            </p>
-                          </div>
+                                <p className="mt-0.5 text-xs leading-relaxed text-amber-700">
+                                  {formatCurrency(farmerAdvance)} existing advance is available.
+                                  Backend FIFO accounting will apply it to the new work according to your work accounting logic.
+                                </p>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
-                  ) : (
-                    <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-500">
-                      Select a farmer to view their financial summary.
-                    </div>
-                  )}
-                </section>
+                    </section>
 
-                {/* WORK INFORMATION */}
-                <section>
-                  <div className="mb-4 flex items-center gap-2">
-                    <Tractor
-                      size={18}
-                      className="text-emerald-600"
-                    />
+                    {/* WORK DETAILS */}
 
-                    <h3 className="font-semibold text-slate-800">
-                      Work Details
-                    </h3>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-
-                    <Field label="Field Name">
-                      <div className="relative">
-                        <Hash className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                        <input
-                          name="fieldName"
-                          value={form.fieldName}
-                          onChange={handleChange}
-                          placeholder="Enter field name"
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                        />
-                      </div>
-                    </Field>
-
-                    <Field label="Work Type">
-                      <div className="relative">
-                        <Tractor className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                        <select
-                          name="workType"
-                          value={form.workType}
-                          onChange={handleChange}
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                        >
-                          {rates.map((rate) => (
-                            <option
-                              key={rate._id || rate.type}
-                              value={rate.type}
-                            >
-                              {rate.type}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </Field>
-
-                    <Field label="Rate Per Hour">
-                      <div className="relative">
-                        <IndianRupee className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                        <input
-                          value={
-                            ratePerHour
-                              ? formatCurrency(ratePerHour)
-                              : "Not set"
-                          }
-                          readOnly
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-10 py-3.5 text-sm font-semibold text-slate-600 outline-none"
-                        />
-                      </div>
-                    </Field>
-
-                    <Field label="Total Minutes">
-                      <div className="relative">
-                        <Clock3 className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                        <input
-                          name="totalMinutes"
-                          type="number"
-                          min="1"
-                          value={form.totalMinutes}
-                          onChange={handleChange}
-                          placeholder="e.g. 120"
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                        />
-                      </div>
-                    </Field>
-
-                    <Field label="Work Date">
-                      <div className="relative">
-                        <CalendarDays className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                        <input
-                          name="date"
-                          type="date"
-                          value={form.date}
-                          onChange={handleChange}
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                        />
-                      </div>
-                    </Field>
-
-                    <Field label="Paid Amount">
-                      <div className="relative">
-                        <BadgeIndianRupee className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                        <input
-                          name="paidAmount"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={form.paidAmount}
-                          onChange={handleChange}
-                          placeholder="e.g. 500"
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                        />
-                      </div>
-                    </Field>
-                  </div>
-                </section>
-
-                {/* LIVE WORK PAYMENT SUMMARY */}
-                <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-                  <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-5 py-4">
-                    <Calculator
-                      size={18}
-                      className="text-emerald-600"
-                    />
-
-                    <div>
-                      <h3 className="font-semibold text-slate-800">
-                        New Work Payment Summary
-                      </h3>
-
-                      <p className="text-xs text-slate-500">
-                        Automatically calculated from work duration and rate
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-3">
-
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-xs font-medium text-slate-500">
-                        Work Amount
-                      </p>
-
-                      <p className="mt-2 text-2xl font-bold text-slate-900">
-                        {formatCurrency(calculatedAmount)}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl bg-emerald-50 p-4">
-                      <p className="text-xs font-medium text-emerald-700">
-                        Paid for this Work
-                      </p>
-
-                      <p className="mt-2 text-2xl font-bold text-emerald-700">
-                        {formatCurrency(enteredPaidAmount)}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl bg-rose-50 p-4">
-                      <p className="text-xs font-medium text-rose-700">
-                        Remaining Due
-                      </p>
-
-                      <p className="mt-2 text-2xl font-bold text-rose-600">
-                        {formatCurrency(dueAmount)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="px-5 pb-5">
-
-                    <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-                      <span>Payment Progress</span>
-
-                      <span className="font-semibold text-emerald-700">
-                        {Math.round(paidRatio * 100)}%
-                      </span>
-                    </div>
-
-                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600 transition-all duration-300"
-                        style={{
-                          width: `${paidRatio * 100}%`,
-                        }}
+                    <section>
+                      <SectionHeading
+                        icon={Tractor}
+                        title="Work Details"
                       />
-                    </div>
 
-                    {extraPayment > 0 && (
-                      <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3">
-                        <AlertCircle
-                          size={17}
-                          className="mt-0.5 shrink-0 text-amber-600"
+                      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                        <Field label="Field Name">
+                          <div className="relative">
+                            <Hash className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                            <input
+                              name="fieldName"
+                              value={form.fieldName}
+                              onChange={handleChange}
+                              placeholder="Enter field name"
+                              required
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                            />
+                          </div>
+                        </Field>
+
+                        <Field label="Work Type">
+                          <div className="relative">
+                            <Tractor className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                            <select
+                              name="workType"
+                              value={form.workType}
+                              onChange={handleChange}
+                              required
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                            >
+                              <option value="">
+                                Select work type
+                              </option>
+
+                              {rates.map((rate) => (
+                                <option
+                                  key={rate._id || rate.type}
+                                  value={rate.type}
+                                >
+                                  {rate.type}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </Field>
+
+                        <Field label="Rate Per Hour">
+                          <div className="relative">
+                            <IndianRupee className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                            <input
+                              value={
+                                ratePerHour
+                                  ? formatCurrency(ratePerHour)
+                                  : "Not set"
+                              }
+                              readOnly
+                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-10 py-3.5 text-sm font-semibold text-slate-600 outline-none"
+                            />
+                          </div>
+                        </Field>
+
+                        <Field label="Total Minutes">
+                          <div className="relative">
+                            <Clock3 className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                            <input
+                              name="totalMinutes"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={form.totalMinutes}
+                              onChange={handleChange}
+                              placeholder="e.g. 120"
+                              required
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                            />
+                          </div>
+                        </Field>
+
+                        <Field label="Work Date">
+                          <div className="relative">
+                            <CalendarDays className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                            <input
+                              name="date"
+                              type="date"
+                              value={form.date}
+                              onChange={handleChange}
+                              required
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                            />
+                          </div>
+                        </Field>
+                      </div>
+                    </section>
+
+                    {/* WORK PREVIEW */}
+
+                    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                      <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-5 py-4">
+                        <Calculator
+                          size={18}
+                          className="text-emerald-600"
                         />
 
                         <div>
-                          <p className="text-sm font-semibold text-amber-800">
-                            Payment exceeds work amount
-                          </p>
+                          <h3 className="font-semibold text-slate-800">
+                            Work Amount Preview
+                          </h3>
 
-                          <p className="mt-1 text-xs text-amber-700">
-                            The entered payment exceeds this work's amount
-                            by {formatCurrency(extraPayment)}. Confirm that
-                            your backend supports storing this excess as
-                            farmer advance before submitting.
+                          <p className="text-xs text-slate-500">
+                            Calculated using rate and duration
                           </p>
                         </div>
                       </div>
-                    )}
 
-                    {calculatedAmount > 0 &&
-                      enteredPaidAmount <= calculatedAmount &&
-                      dueAmount === 0 && (
-                        <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm font-medium text-emerald-700">
-                          <CheckCircle2 size={17} />
-                          This work is fully paid.
-                        </div>
-                      )}
+                      <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2">
+                        <SummaryTile
+                          label="Rate Per Hour"
+                          value={formatCurrency(ratePerHour)}
+                          icon={IndianRupee}
+                          tone="slate"
+                        />
+
+                        <SummaryTile
+                          label="Estimated Work Amount"
+                          value={formatCurrency(calculatedAmount)}
+                          icon={Calculator}
+                          tone="emerald"
+                        />
+                      </div>
+
+                      <div className="px-5 pb-5">
+                        <p className="rounded-xl bg-blue-50 p-3 text-xs leading-relaxed text-blue-700">
+                          Available farmer advance will be handled by the backend accounting system. Any direct payment will be recorded separately after the work is created.
+                        </p>
+                      </div>
+                    </section>
+
+                    {/* SAVE WORK */}
+
+                    <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-slate-400">
+                        Verify farmer and work details before saving.
+                      </p>
+
+                      <PrimaryButton
+                        type="submit"
+                        disabled={submitting || !selectedFarmer}
+                        className="flex min-w-48 items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700"
+                      >
+                        {submitting ? (
+                          <>
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                            Creating Work...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 size={17} />
+                            Create Work Record
+                          </>
+                        )}
+                      </PrimaryButton>
+                    </div>
                   </div>
-                </section>
+                </form>
+              )}
 
-                {/* EXISTING FARMER ADVANCE REMINDER */}
-                {selectedFarmer && farmerAdvance > 0 && (
-                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                        <Wallet size={19} />
+              {/* --------------------------------------------------
+                  AFTER WORK CREATION: PAYMENT SECTION
+              -------------------------------------------------- */}
+
+              {createdWork && (
+                <div className="space-y-6 p-5 sm:p-7">
+
+                  {/* SUCCESS HEADER */}
+
+                  <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                        <CheckCircle2 size={23} />
                       </div>
 
-                      <div>
-                        <p className="text-sm font-semibold text-amber-900">
-                          Existing Farmer Advance
+                      <div className="min-w-0 flex-1">
+                        <h2 className="text-lg font-bold text-emerald-900">
+                          Work Created Successfully!
+                        </h2>
+
+                        <p className="mt-1 text-sm text-emerald-700">
+                          {createdWork.workType || form.workType}
+                          {" "} • {createdWork.fieldName || form.fieldName}
                         </p>
 
-                        <p className="text-xs text-amber-700">
-                          Separate from this work's payment
+                        <p className="mt-1 text-xs text-emerald-600">
+                          Work ID: {createdWork._id}
                         </p>
                       </div>
                     </div>
-
-                    <p className="text-lg font-bold text-amber-700">
-                      {formatCurrency(farmerAdvance)}
-                    </p>
                   </div>
-                )}
 
-                {/* SUBMIT */}
-                <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                  {/* WORK FINANCIAL SUMMARY */}
 
-                  <p className="text-xs text-slate-400">
-                    Please verify the farmer and work details before saving.
-                  </p>
+                  <section>
+                    <SectionHeading
+                      icon={Receipt}
+                      title="Work Financial Summary"
+                      subtitle="Advance adjustment and outstanding amount"
+                    />
 
-                  <PrimaryButton
-                    type="submit"
-                    disabled={submitting || loadingOptions}
-                    className="flex min-w-48 items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700"
-                  >
-                    {submitting ? (
-                      <>
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 size={17} />
-                        Save Work Record
-                      </>
-                    )}
-                  </PrimaryButton>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      <SummaryTile
+                        label="Work Amount"
+                        value={formatCurrency(workTotal)}
+                        icon={IndianRupee}
+                        tone="slate"
+                      />
+
+                      <SummaryTile
+                        label="Advance Applied"
+                        value={formatCurrency(workAdvance)}
+                        icon={Wallet}
+                        tone="amber"
+                      />
+
+                      <SummaryTile
+                        label="Remaining Due"
+                        value={formatCurrency(
+                          paymentCompleted
+                            ? paymentResult?.remainingDue
+                            : workDue
+                        )}
+                        icon={AlertCircle}
+                        tone="rose"
+                      />
+                    </div>
+                  </section>
+
+                  {/* PAYMENT FORM OR SUCCESS */}
+
+                  {paymentCompleted ? (
+                    <section className="overflow-hidden rounded-3xl border border-emerald-200 bg-white">
+                      <div className="bg-emerald-600 p-5 text-white">
+                        <div className="flex items-center gap-3">
+                          <CheckCircle2 size={25} />
+
+                          <div>
+                            <h3 className="text-lg font-bold">
+                              Payment Recorded!
+                            </h3>
+
+                            <p className="text-xs text-emerald-100">
+                              Payment successfully submitted
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 p-5">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm text-slate-500">
+                            Received amount
+                          </span>
+
+                          <strong className="text-lg text-emerald-700">
+                            {formatCurrency(paymentResult?.amount)}
+                          </strong>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm text-slate-500">
+                            Applied to work
+                          </span>
+
+                          <strong className="text-slate-800">
+                            {formatCurrency(paymentResult?.appliedAmount)}
+                          </strong>
+                        </div>
+
+                        {paymentResult?.advanceAmount > 0 && (
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm text-slate-500">
+                              Added to farmer advance
+                            </span>
+
+                            <strong className="text-amber-700">
+                              {formatCurrency(paymentResult.advanceAmount)}
+                            </strong>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                          <span className="text-sm font-medium text-slate-600">
+                            Remaining due
+                          </span>
+
+                          <strong className="text-lg text-rose-600">
+                            {formatCurrency(paymentResult?.remainingDue)}
+                          </strong>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm text-slate-500">
+                            Payment method
+                          </span>
+
+                          <strong className="text-slate-800">
+                            {paymentResult?.paymentMethod}
+                          </strong>
+                        </div>
+
+                        {paymentResult?.remainingAdvance !== undefined && (
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm text-slate-500">
+                              Farmer available advance
+                            </span>
+
+                            <strong className="text-amber-700">
+                              {formatCurrency(paymentResult.remainingAdvance)}
+                            </strong>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-col gap-3 border-t border-slate-100 p-5 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={() => navigate("/payments")}
+                          className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          <Receipt size={16} />
+                          View Payments
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={resetWorkForm}
+                          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-700"
+                        >
+                          <Tractor size={16} />
+                          Add Another Work
+                        </button>
+                      </div>
+                    </section>
+                  ) : workDue <= 0 ? (
+                    <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-6 text-center">
+                      <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
+
+                      <h3 className="mt-3 text-lg font-bold text-emerald-900">
+                        Work Fully Settled
+                      </h3>
+
+                      <p className="mt-1 text-sm text-emerald-700">
+                        Available farmer advance has covered this work. No additional payment is required.
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={resetWorkForm}
+                        className="mt-5 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-700"
+                      >
+                        <Tractor size={16} />
+                        Add Another Work
+                      </button>
+                    </section>
+                  ) : (
+                    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                      <div className="border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white px-5 py-4">
+                        <SectionHeading
+                          icon={CreditCard}
+                          title="Receive Payment Now"
+                          subtitle="Record a direct payment against this newly created work"
+                        />
+                      </div>
+
+                      <form
+                        onSubmit={handlePaymentSubmit}
+                        className="space-y-5 p-5"
+                      >
+                        <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-rose-600">
+                            Outstanding Amount
+                          </p>
+
+                          <p className="mt-1 text-3xl font-extrabold text-rose-700">
+                            {formatCurrency(workDue)}
+                          </p>
+
+                          {workAdvance > 0 && (
+                            <p className="mt-1 text-xs text-rose-600">
+                              After advance adjustment of {formatCurrency(workAdvance)}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                          <Field label="Payment Amount">
+                            <div className="relative">
+                              <IndianRupee className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                              <input
+                                type="number"
+                                name="amount"
+                                min="0.01"
+                                step="0.01"
+                                value={paymentForm.amount}
+                                onChange={handlePaymentChange}
+                                placeholder="Enter amount"
+                                required
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                              />
+                            </div>
+                          </Field>
+
+                          <Field label="Payment Method">
+                            <div className="relative">
+                              <CreditCard className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                              <select
+                                name="paymentMethod"
+                                value={paymentForm.paymentMethod}
+                                onChange={handlePaymentChange}
+                                required
+                                className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-10 py-3.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                              >
+                                <option value="CASH">Cash</option>
+                                <option value="UPI">UPI</option>
+                                <option value="CARD">Card</option>
+                                <option value="BANK">Bank Transfer</option>
+                              </select>
+                            </div>
+                          </Field>
+                        </div>
+
+                        <Field label="Payment Note (Optional)">
+                          <textarea
+                            name="note"
+                            value={paymentForm.note}
+                            onChange={handlePaymentChange}
+                            rows={3}
+                            placeholder="Enter payment note..."
+                            className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                          />
+                        </Field>
+
+                        {/* PAYMENT PREVIEW */}
+
+                        <div className="rounded-2xl bg-slate-50 p-4">
+                          <div className="flex items-center justify-between gap-3 text-sm">
+                            <span className="text-slate-500">
+                              Payment entered
+                            </span>
+
+                            <strong className="text-slate-900">
+                              {formatCurrency(enteredPayment)}
+                            </strong>
+                          </div>
+
+                          <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+                            <span className="text-slate-500">
+                              Due before payment
+                            </span>
+
+                            <strong className="text-slate-900">
+                              {formatCurrency(workDue)}
+                            </strong>
+                          </div>
+
+                          <div className="mt-3 border-t border-slate-200 pt-3">
+                            {paymentExcess > 0 ? (
+                              <div className="flex items-start gap-2 text-xs text-amber-700">
+                                <AlertCircle size={16} className="shrink-0" />
+
+                                <span>
+                                  Payment exceeds this work's due by {formatCurrency(paymentExcess)}. The backend may allocate the excess as farmer advance according to your payment controller.
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between gap-3 text-sm">
+                                <span className="text-slate-500">
+                                  Estimated remaining due
+                                </span>
+
+                                <strong className="text-rose-600">
+                                  {formatCurrency(paymentRemaining)}
+                                </strong>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={
+                            paymentSubmitting ||
+                            enteredPayment <= 0
+                          }
+                          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 py-4 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {paymentSubmitting ? (
+                            <>
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                              Recording Payment...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 size={18} />
+                              Record Payment
+                              {enteredPayment > 0
+                                ? ` • ${formatCurrency(enteredPayment)}`
+                                : ""}
+                            </>
+                          )}
+                        </button>
+
+                        <p className="text-center text-xs text-slate-400">
+                          Payment will be saved against this work record.
+                        </p>
+                      </form>
+                    </section>
+                  )}
                 </div>
-              </div>
-            </form>
+              )}
+            </>
           )}
         </Card>
 
         <p className="mt-5 text-center text-xs text-slate-400">
-          Work amount is calculated using the selected work rate and total minutes.
+          Work and payment are stored separately to maintain accurate accounting.
         </p>
       </div>
     </div>

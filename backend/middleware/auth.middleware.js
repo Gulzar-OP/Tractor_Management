@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 
+
 export const protect = (req, res, next) => {
   try {
     const token = req.cookies?.authToken;
@@ -7,21 +8,29 @@ export const protect = (req, res, next) => {
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: "Not authorized",
+        message: "Not authorized - Token missing",
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // console.log("Decoded Token:", decoded);
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
 
     req.user = decoded;
 
-    // Owner ki apni ID ownerId hogi
-    // Driver ke liye token mein ownerId honi chahiye
     req.ownerId =
       decoded.ownerId ||
-      (decoded.role === "owner" ? decoded.id || decoded._id : null);
+      (decoded.role === "owner"
+        ? decoded.id || decoded._id
+        : null);
+
+    console.log("PROTECT MIDDLEWARE:", {
+      path: req.originalUrl,
+      method: req.method,
+      user: req.user,
+      ownerId: req.ownerId,
+    });
 
     if (!req.ownerId) {
       return res.status(401).json({
@@ -32,7 +41,7 @@ export const protect = (req, res, next) => {
 
     next();
   } catch (err) {
-    console.error("Auth middleware error:", err);
+    console.error("Auth Error:", err.message);
 
     return res.status(401).json({
       success: false,
@@ -40,6 +49,7 @@ export const protect = (req, res, next) => {
     });
   }
 };
+
 
 export const isOwner = (req, res, next) => {
   if (!req.user || req.user.role !== "owner") {

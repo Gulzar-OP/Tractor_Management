@@ -1,5 +1,4 @@
-
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -13,20 +12,26 @@ import {
   Receipt,
   TrendingUp,
   CreditCard,
-  CalendarDays,
+  Tractor,
+  Banknote,
+  Smartphone,
+  Landmark,
+  ChevronDown,
+  X,
+  ArrowLeft,
 } from "lucide-react";
 
-import PageHeader from "../../components/UI/PageHeader";
-import Card from "../../components/UI/Card";
-import Field from "../../components/UI/Field";
-import PrimaryButton from "../../components/UI/PrimaryButton";
+const PAYMENT_METHODS = [
+  { id: "CASH", label: "Cash", icon: Banknote },
+  { id: "UPI", label: "UPI", icon: Smartphone },
+  { id: "CARD", label: "Card", icon: CreditCard },
+  { id: "BANK", label: "Bank", icon: Landmark },
+];
 
-const PAYMENT_METHODS = ["CASH", "UPI", "CARD", "BANK"];
-
-const API_BASE =
-  import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
-
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 const API = `${API_BASE}/api`;
+
+/* ------------------------------ helpers ------------------------------ */
 
 const formatCurrency = (amount = 0) =>
   new Intl.NumberFormat("en-IN", {
@@ -37,27 +42,26 @@ const formatCurrency = (amount = 0) =>
 
 const getFarmerName = (farmer) => {
   if (!farmer) return "Unknown Farmer";
-
-  return (
-    farmer.name ||
-    farmer.fullName ||
-    farmer.farmerName ||
-    "Unknown Farmer"
-  );
+  return farmer.name || farmer.fullName || farmer.farmerName || "Unknown Farmer";
 };
 
-const getFarmerId = (farmer) => {
-  return farmer?._id || farmer?.id || "";
-};
+const getFarmerId = (farmer) => farmer?._id || farmer?.id || "";
 
 const getDate = (date) => {
   if (!date) return "-";
-
-  return new Date(date).toLocaleDateString("en-IN", {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleDateString("en-IN", {
     day: "2-digit",
     month: "short",
     year: "numeric",
   });
+};
+
+const getInitials = (name = "") => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
 };
 
 const getArray = (data) => {
@@ -68,15 +72,20 @@ const getArray = (data) => {
   return [];
 };
 
+const labelCls =
+  "mb-2 block text-xs font-bold uppercase tracking-wide text-stone-400";
+
+/* ------------------------------ page ------------------------------ */
+
 export default function PaymentPage() {
   const location = useLocation();
   const navigate = useNavigate();
 
   const incoming = location.state || {};
 
-  // --------------------------------------------------
-  // STATES
-  // --------------------------------------------------
+  const [activeTab, setActiveTab] = useState(
+    incoming.paymentType === "ADVANCE" ? "ADVANCE" : "WORK_PAYMENT"
+  );
 
   const [farmers, setFarmers] = useState([]);
   const [works, setWorks] = useState([]);
@@ -85,13 +94,8 @@ export default function PaymentPage() {
   const [loadingWorks, setLoadingWorks] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [farmerId, setFarmerId] = useState(
-    incoming.farmerID || ""
-  );
-
-  const [workId, setWorkId] = useState(
-    incoming.workId || ""
-  );
+  const [farmerId, setFarmerId] = useState(incoming.farmerID || "");
+  const [workId, setWorkId] = useState(incoming.workId || "");
 
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("CASH");
@@ -100,49 +104,34 @@ export default function PaymentPage() {
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // --------------------------------------------------
-  // SELECTED FARMER
-  // --------------------------------------------------
+  const toastTimer = useRef(null);
+  const worksReq = useRef(0); // guards against out-of-order responses
+
+  const isAdvance = activeTab === "ADVANCE";
+
+  /* ---------------- toast ---------------- */
+
+  const showToast = useCallback((type, message) => {
+    clearTimeout(toastTimer.current);
+    setToast({ type, message });
+    toastTimer.current = setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+  /* ---------------- selected farmer ---------------- */
 
   const selectedFarmer = useMemo(
-    () =>
-      farmers.find(
-        (farmer) => getFarmerId(farmer) === farmerId
-      ) || null,
+    () => farmers.find((f) => getFarmerId(f) === farmerId) || null,
     [farmers, farmerId]
   );
 
-  const existingAdvance = Number(
-    selectedFarmer?.advanceAmount || 0
-  );
+  const existingAdvance = Number(selectedFarmer?.advanceAmount || 0);
+  const farmerTotalBilled = Number(selectedFarmer?.totalBilledAmount || 0);
+  const farmerTotalPaid = Number(selectedFarmer?.totalPaidAmount || 0);
+  const farmerTotalDue = Number(selectedFarmer?.totalDueAmount || 0);
 
-  const farmerTotalBilled = Number(
-    selectedFarmer?.totalBilledAmount || 0
-  );
-
-  const farmerTotalPaid = Number(
-    selectedFarmer?.totalPaidAmount || 0
-  );
-
-  const farmerTotalDue = Number(
-    selectedFarmer?.totalDueAmount || 0
-  );
-
-  // --------------------------------------------------
-  // TOAST
-  // --------------------------------------------------
-
-  const showToast = (type, message) => {
-    setToast({ type, message });
-
-    setTimeout(() => {
-      setToast(null);
-    }, 4000);
-  };
-
-  // --------------------------------------------------
-  // FETCH FARMERS
-  // --------------------------------------------------
+  /* ---------------- fetch ---------------- */
 
   const fetchFarmers = useCallback(async () => {
     try {
@@ -151,203 +140,134 @@ export default function PaymentPage() {
         {},
         { withCredentials: true }
       );
-
       const list = getArray(res.data);
-
       setFarmers(list);
-
       return list;
     } catch (error) {
       console.error("Fetch Farmers Error:", error);
-
-      showToast(
-        "error",
-        error.response?.data?.message ||
-          "Could not load farmers list"
-      );
-
+      showToast("error", error.response?.data?.message || "Could not load farmers list");
       return [];
     }
-  }, []);
-
-  // --------------------------------------------------
-  // FETCH SELECTED FARMER WORKS
-  // --------------------------------------------------
+  }, [showToast]);
 
   const fetchFarmerWorks = useCallback(
     async (selectedId, preferredWorkId = "") => {
       if (!selectedId) {
         setWorks([]);
         setWorkId("");
-        return;
+        return null;
       }
+
+      const reqId = ++worksReq.current;
 
       try {
         setLoadingWorks(true);
 
-        const res = await axios.get(
-          `${API}/farmer/${selectedId}`,
-          { withCredentials: true }
-        );
+        const res = await axios.get(`${API}/farmer/${selectedId}`, {
+          withCredentials: true,
+        });
 
-        const farmerData =
-          res.data?.farmer || res.data?.data || res.data;
+        // A newer farmer was selected while this was loading: drop this response
+        if (reqId !== worksReq.current) return null;
 
-        const allWorks = Array.isArray(farmerData?.works)
-          ? farmerData.works
-          : [];
-
-        // Only works having outstanding dues
-        const dueWorks = allWorks.filter(
-          (work) => Number(work.dueAmount || 0) > 0
-        );
+        const farmerData = res.data?.farmer || res.data?.data || res.data;
+        const allWorks = Array.isArray(farmerData?.works) ? farmerData.works : [];
+        const dueWorks = allWorks.filter((w) => Number(w.dueAmount || 0) > 0);
 
         setWorks(dueWorks);
 
-        // Keep selected work if it still has due
-        const preferredWork = dueWorks.find(
-          (work) => work._id === preferredWorkId
-        );
-
-        setWorkId(
-          preferredWork?._id || dueWorks[0]?._id || ""
-        );
+        const preferred = dueWorks.find((w) => w._id === preferredWorkId);
+        setWorkId(preferred?._id || dueWorks[0]?._id || "");
 
         return farmerData;
       } catch (error) {
+        if (reqId !== worksReq.current) return null;
         console.error("Fetch Works Error:", error);
-
-        showToast(
-          "error",
-          error.response?.data?.message ||
-            "Could not load work records"
-        );
-
+        showToast("error", error.response?.data?.message || "Could not load work records");
         setWorks([]);
         setWorkId("");
-
         return null;
       } finally {
-        setLoadingWorks(false);
+        if (reqId === worksReq.current) setLoadingWorks(false);
       }
     },
-    []
+    [showToast]
   );
 
-  // --------------------------------------------------
-  // INITIAL FETCH
-  // --------------------------------------------------
-
+  // Load the farmer list once.
+  // NOTE: no farmer is auto-selected any more, so a payment can never be
+  // recorded against the wrong person just because they were first in the list.
   useEffect(() => {
-    const loadFarmers = async () => {
+    const load = async () => {
       setLoadingFarmers(true);
-
-      const list = await fetchFarmers();
-
-      if (!farmerId && list.length > 0) {
-        setFarmerId(getFarmerId(list[0]));
-      }
-
+      await fetchFarmers();
       setLoadingFarmers(false);
     };
+    load();
+  }, [fetchFarmers]);
 
-    loadFarmers();
-
-    // Initial fetch only
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // --------------------------------------------------
-  // FETCH WORKS WHEN FARMER CHANGES
-  // --------------------------------------------------
-
+  // Work records are only needed for the Work Payment tab
   useEffect(() => {
-    if (!farmerId) {
+    if (isAdvance || !farmerId) {
       setWorks([]);
       setWorkId("");
       return;
     }
-
     fetchFarmerWorks(farmerId, incoming.workId || "");
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [farmerId, fetchFarmerWorks]);
+  }, [farmerId, isAdvance, fetchFarmerWorks]);
 
-  // --------------------------------------------------
-  // SELECTED WORK
-  // --------------------------------------------------
+  /* ---------------- selected work + calculations ---------------- */
 
   const selectedWork = useMemo(
-    () => works.find((work) => work._id === workId) || null,
+    () => works.find((w) => w._id === workId) || null,
     [works, workId]
   );
 
-  // --------------------------------------------------
-  // PAYMENT CALCULATIONS
-  // --------------------------------------------------
+  const dueAmount = Number(selectedWork?.dueAmount ?? 0);
+  const workTotalAmount = Number(selectedWork?.totalAmount ?? 0);
+  const workPaidAmount = Number(selectedWork?.paidAmount ?? 0);
 
-  const dueAmount = Number(
-    selectedWork?.dueAmount ?? 0
-  );
-
-  const workTotalAmount = Number(
-    selectedWork?.totalAmount ?? 0
-  );
-
-  const workPaidAmount = Number(
-    selectedWork?.paidAmount ?? 0
-  );
-
-  const numericAmount =
-    amount === "" ? 0 : Number(amount);
-
+  const numericAmount = amount === "" ? 0 : Number(amount);
   const amountInvalid =
-    amount !== "" &&
-    (!Number.isFinite(numericAmount) || numericAmount <= 0);
+    amount !== "" && (!Number.isFinite(numericAmount) || numericAmount <= 0);
+  const amountReady = amount !== "" && !amountInvalid;
 
-  // Amount applied to selected work
   const appliedAmount = selectedWork
     ? Math.min(Math.max(numericAmount, 0), dueAmount)
     : 0;
+  const newAdvance = selectedWork ? Math.max(numericAmount - dueAmount, 0) : 0;
+  const remainingDue = Math.max(dueAmount - appliedAmount, 0);
+  const isOverpayment = Boolean(selectedWork) && amountReady && numericAmount > dueAmount;
+  const estimatedAdvance = existingAdvance + newAdvance;
+  const estimatedIndependentAdvance = existingAdvance + numericAmount;
 
-  // Extra amount becomes farmer advance
-  const newAdvance = selectedWork
-    ? Math.max(numericAmount - dueAmount, 0)
-    : 0;
+  /* ---------------- validation ---------------- */
 
-  // Remaining due after this payment
-  const remainingDue = Math.max(
-    dueAmount - appliedAmount,
-    0
-  );
+  const canSubmit = isAdvance
+    ? Boolean(farmerId) && amountReady && !submitting
+    : Boolean(farmerId) &&
+      Boolean(selectedWork) &&
+      amountReady &&
+      !submitting &&
+      !loadingWorks;
 
-  const isOverpayment =
-    selectedWork &&
-    amount !== "" &&
-    !amountInvalid &&
-    numericAmount > dueAmount;
+  /* ---------------- actions ---------------- */
 
-  // Estimated advance after this payment
-  const estimatedAdvance =
-    existingAdvance + newAdvance;
+  const switchTab = (tab) => {
+    if (tab === activeTab) return;
+    setActiveTab(tab);
+    setAmount("");
+    setNote("");
+    setToast(null);
+  };
 
-  // --------------------------------------------------
-  // SUBMIT VALIDATION
-  // --------------------------------------------------
-
-  const canSubmit =
-    Boolean(farmerId) &&
-    Boolean(workId) &&
-    Boolean(selectedWork) &&
-    amount !== "" &&
-    !amountInvalid &&
-    Boolean(paymentMethod) &&
-    !submitting &&
-    !loadingWorks;
-
-  // --------------------------------------------------
-  // REFRESH ALL DATA
-  // --------------------------------------------------
+  const handleFarmerChange = (value) => {
+    setFarmerId(value);
+    setWorkId("");
+    setAmount("");
+    setNote("");
+  };
 
   const handleRefresh = async () => {
     if (!farmerId) {
@@ -357,42 +277,55 @@ export default function PaymentPage() {
 
     try {
       setRefreshing(true);
-
       await Promise.all([
         fetchFarmers(),
-        fetchFarmerWorks(farmerId, workId),
+        isAdvance ? Promise.resolve() : fetchFarmerWorks(farmerId, workId),
       ]);
-
       showToast("success", "Account details refreshed");
     } finally {
       setRefreshing(false);
     }
   };
 
-  // --------------------------------------------------
-  // SUBMIT PAYMENT
-  // --------------------------------------------------
-
   async function submit(e) {
     e.preventDefault();
-
     if (!canSubmit) return;
 
     try {
       setSubmitting(true);
       setToast(null);
 
-      const driverID =
-        selectedWork?.createdBy ||
-        incoming.driverID ||
-        selectedFarmer?.createdBy;
-
-      if (!driverID) {
-        showToast(
-          "error",
-          "Could not determine driver for this work"
+      // ---- Independent farmer advance ----
+      if (isAdvance) {
+        const res = await axios.post(
+          `${API}/payment/advance`,
+          {
+            farmerID: farmerId,
+            amount: numericAmount,
+            paymentMethod,
+            note: note.trim(),
+          },
+          { withCredentials: true }
         );
 
+        if (!res.data?.success) {
+          showToast("error", res.data?.message || "Advance payment failed");
+          return;
+        }
+
+        showToast("success", `${formatCurrency(numericAmount)} advance received successfully`);
+        setAmount("");
+        setNote("");
+        await fetchFarmers();
+        return;
+      }
+
+      // ---- Work payment ----
+      const driverID =
+        selectedWork?.createdBy || incoming.driverID || selectedFarmer?.createdBy;
+
+      if (!driverID) {
+        showToast("error", "Could not determine driver for this work");
         return;
       }
 
@@ -409,229 +342,220 @@ export default function PaymentPage() {
       );
 
       if (!res.data?.success) {
-        showToast(
-          "error",
-          res.data?.message || "Payment failed"
-        );
-
+        showToast("error", res.data?.message || "Payment failed");
         return;
       }
 
       const summary = res.data.summary || {};
+      const actualAdvance = Number(summary.advanceAmount ?? newAdvance);
 
-      const actualAdvance = Number(
-        summary.advanceAmount ?? newAdvance
+      showToast(
+        "success",
+        actualAdvance > 0
+          ? `Payment saved! ${formatCurrency(actualAdvance)} added to advance balance`
+          : "Payment saved successfully"
       );
-
-      let successMessage = "Payment saved successfully";
-
-      if (actualAdvance > 0) {
-        successMessage =
-          `Payment saved! ${formatCurrency(actualAdvance)} added to advance balance`;
-      }
-
-      showToast("success", successMessage);
 
       setAmount("");
       setNote("");
 
-      // Refresh farmer account and work records
-      await Promise.all([
-        fetchFarmers(),
-        fetchFarmerWorks(farmerId, ""),
-      ]);
+      await Promise.all([fetchFarmers(), fetchFarmerWorks(farmerId, "")]);
     } catch (error) {
       console.error("Payment Error:", error);
-
       showToast(
         "error",
-        error.response?.data?.message ||
-          "Something went wrong while saving payment"
+        error.response?.data?.message || "Something went wrong while saving payment"
       );
     } finally {
       setSubmitting(false);
     }
   }
 
-  // --------------------------------------------------
-  // UI
-  // --------------------------------------------------
+  /* ---------------- theme ---------------- */
+
+  const accentBtn = isAdvance
+    ? "bg-amber-500 shadow-amber-500/25 hover:bg-amber-600"
+    : "bg-emerald-600 shadow-emerald-600/25 hover:bg-emerald-700";
+
+  const focusCls = isAdvance
+    ? "focus:border-amber-500 focus:ring-amber-100"
+    : "focus:border-emerald-500 focus:ring-emerald-100";
+
+  const baseInput = `w-full rounded-2xl border bg-stone-50 text-sm font-semibold text-stone-800 outline-none transition placeholder:font-normal placeholder:text-stone-400 focus:bg-white focus:ring-4 ${focusCls}`;
+
+  /* ---------------- render ---------------- */
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-slate-50 p-4 sm:p-6 lg:p-8">
-
-      <div className="mx-auto max-w-4xl">
-
-        {/* HEADER */}
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <PageHeader
-            title="Add Payment"
-            subtitle="Record payment and manage farmer balance"
-          />
+    <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6 lg:p-8">
+      {/* Hero */}
+      <header className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-teal-800 p-6 text-white shadow-2xl shadow-emerald-950/20 sm:p-8">
+        <div className="pointer-events-none absolute -right-16 -top-20 h-60 w-60 rounded-full border-[36px] border-white/5" />
+        <div className="relative flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              aria-label="Go back"
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/20 backdrop-blur transition hover:bg-white/20"
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <div>
+              <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
+                Payments
+              </h1>
+              <p className="mt-1 text-sm text-emerald-100/80">
+                Manage work payments and farmer advances
+              </p>
+            </div>
+          </div>
 
           <button
             type="button"
             onClick={handleRefresh}
             disabled={refreshing || !farmerId}
-            className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2.5 text-sm font-bold ring-1 ring-white/20 backdrop-blur transition hover:bg-white/20 disabled:opacity-50"
           >
-            <RefreshCw
-              size={16}
-              className={refreshing ? "animate-spin" : ""}
-            />
+            <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
             Refresh
           </button>
         </div>
+      </header>
 
-        <Card className="mt-6 rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_10px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-6">
+      {/* Tabs */}
+      <div className="grid grid-cols-2 gap-2 rounded-3xl bg-white p-2 shadow-sm ring-1 ring-stone-900/5">
+        <button
+          type="button"
+          onClick={() => switchTab("WORK_PAYMENT")}
+          className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-extrabold transition ${
+            !isAdvance
+              ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/25"
+              : "text-stone-500 hover:bg-stone-50"
+          }`}
+        >
+          <Tractor size={18} />
+          Work Payment
+        </button>
+        <button
+          type="button"
+          onClick={() => switchTab("ADVANCE")}
+          className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-extrabold transition ${
+            isAdvance
+              ? "bg-amber-500 text-white shadow-lg shadow-amber-500/25"
+              : "text-stone-500 hover:bg-stone-50"
+          }`}
+        >
+          <Wallet size={18} />
+          Farmer Advance
+        </button>
+      </div>
 
-          {/* INCOMING FARMER */}
-
-          {incoming.farmerName && (
-            <div className="mb-5 flex items-center gap-2 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-              <CheckCircle2 size={16} />
-              Recording payment for
-              <span className="font-semibold">
-                {incoming.farmerName}
-              </span>
-            </div>
-          )}
-
-          <form
-            onSubmit={submit}
-            className="grid grid-cols-1 gap-5 sm:grid-cols-2"
+      <div className="grid items-start gap-6 lg:grid-cols-5">
+        {/* ============ FORM ============ */}
+        <form
+          onSubmit={submit}
+          className="space-y-5 rounded-[2rem] bg-white p-6 shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5 sm:p-8 lg:col-span-3"
+        >
+          {/* Intro */}
+          <div
+            className={`flex items-start gap-3 rounded-2xl p-4 ${
+              isAdvance ? "bg-amber-50" : "bg-emerald-50"
+            }`}
           >
-
-            {/* FARMER */}
-
-            <div className="sm:col-span-2">
-              <Field label="Select Farmer">
-                <select
-                  value={farmerId}
-                  onChange={(e) => {
-                    setFarmerId(e.target.value);
-                    setWorkId("");
-                    setAmount("");
-                    setNote("");
-                  }}
-                  disabled={loadingFarmers}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 disabled:opacity-60"
-                >
-                  <option value="">
-                    {loadingFarmers
-                      ? "Loading farmers..."
-                      : "Select Farmer"}
-                  </option>
-
-                  {farmers.map((farmer) => (
-                    <option
-                      key={getFarmerId(farmer)}
-                      value={getFarmerId(farmer)}
-                    >
-                      {getFarmerName(farmer)}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+            <div
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                isAdvance ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+              }`}
+            >
+              {isAdvance ? <Wallet size={20} /> : <Receipt size={20} />}
             </div>
+            <div>
+              <h2
+                className={`font-extrabold ${
+                  isAdvance ? "text-amber-900" : "text-emerald-900"
+                }`}
+              >
+                {isAdvance ? "Receive Farmer Advance" : "Record Work Payment"}
+              </h2>
+              <p
+                className={`mt-0.5 text-xs leading-relaxed ${
+                  isAdvance ? "text-amber-700" : "text-emerald-700"
+                }`}
+              >
+                {isAdvance
+                  ? "Receive money before any work is done. The balance adjusts automatically against future work."
+                  : "Pick an outstanding work and record the amount received. Any extra becomes farmer advance."}
+              </p>
+            </div>
+          </div>
 
-            {/* FARMER ACCOUNT SUMMARY */}
+          {/* Farmer */}
+          <div>
+            <label htmlFor="farmer" className={labelCls}>
+              Farmer
+            </label>
+            <div className="relative">
+              <User
+                size={17}
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400"
+              />
+              <select
+                id="farmer"
+                value={farmerId}
+                onChange={(e) => handleFarmerChange(e.target.value)}
+                disabled={loadingFarmers}
+                className={`${baseInput} appearance-none border-stone-200 py-3.5 pl-11 pr-10 disabled:opacity-60`}
+              >
+                <option value="">
+                  {loadingFarmers ? "Loading farmers..." : "Select a farmer"}
+                </option>
+                {farmers.map((farmer) => {
+                  const due = Number(farmer.totalDueAmount || 0);
+                  return (
+                    <option key={getFarmerId(farmer)} value={getFarmerId(farmer)}>
+                      {getFarmerName(farmer)}
+                      {due > 0 ? ` — Due ${formatCurrency(due)}` : ""}
+                    </option>
+                  );
+                })}
+              </select>
+              <ChevronDown
+                size={16}
+                className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-stone-400"
+              />
+            </div>
+          </div>
 
-            {selectedFarmer && (
-              <div className="sm:col-span-2">
-
-                <div className="mb-3 flex items-center gap-2">
-                  <User size={18} className="text-emerald-600" />
-
-                  <h3 className="font-semibold text-slate-800">
-                    Farmer Account Summary
-                  </h3>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-
-                  <SummaryCard
-                    title="Total Billed"
-                    value={formatCurrency(farmerTotalBilled)}
-                    color="blue"
-                    icon={<Receipt size={18} />}
-                  />
-
-                  <SummaryCard
-                    title="Total Paid"
-                    value={formatCurrency(farmerTotalPaid)}
-                    color="green"
-                    icon={<CheckCircle2 size={18} />}
-                  />
-
-                  <SummaryCard
-                    title="Total Due"
-                    value={formatCurrency(farmerTotalDue)}
-                    color="red"
-                    icon={<AlertCircle size={18} />}
-                  />
-
-                  <SummaryCard
-                    title="Available Advance"
-                    value={formatCurrency(existingAdvance)}
-                    color="amber"
-                    icon={<Wallet size={18} />}
-                  />
-
-                </div>
-
-                {/* ADVANCE BALANCE */}
-
-                <div className="mt-4 flex flex-col justify-between gap-3 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-yellow-50 p-4 sm:flex-row sm:items-center">
-
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                      <Wallet size={22} />
-                    </div>
-
-                    <div>
-                      <p className="text-sm font-semibold text-amber-900">
-                        Existing Advance Balance
-                      </p>
-
-                      <p className="text-xs text-amber-700">
-                        Available credit for future work adjustment
-                      </p>
-                    </div>
-                  </div>
-
-                  <h2 className="text-2xl font-bold text-amber-900">
-                    {formatCurrency(existingAdvance)}
-                  </h2>
-
-                </div>
-
-              </div>
-            )}
-
-            {/* WORK */}
-
-            <div className="sm:col-span-2">
-              <Field label="Work (with outstanding due)">
-
+          {/* Work */}
+          {!isAdvance && (
+            <div>
+              <label htmlFor="work" className={labelCls}>
+                Work (with outstanding due)
+              </label>
+              <div className="relative">
+                <Tractor
+                  size={17}
+                  className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400"
+                />
                 <select
+                  id="work"
                   value={workId}
                   onChange={(e) => {
                     setWorkId(e.target.value);
                     setAmount("");
                   }}
-                  disabled={loadingWorks || works.length === 0}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 disabled:opacity-60"
+                  disabled={!farmerId || loadingWorks || works.length === 0}
+                  className={`${baseInput} appearance-none border-stone-200 py-3.5 pl-11 pr-10 disabled:opacity-60`}
                 >
                   <option value="">
-                    {loadingWorks
-                      ? "Loading works..."
-                      : works.length === 0
-                      ? "No due works for this farmer"
-                      : "Select Work"}
+                    {!farmerId
+                      ? "Select a farmer first"
+                      : loadingWorks
+                        ? "Loading works..."
+                        : works.length === 0
+                          ? "No due works for this farmer"
+                          : "Select work"}
                   </option>
-
                   {works.map((work) => (
                     <option key={work._id} value={work._id}>
                       {work.workType || work.type || "Work"} — Due{" "}
@@ -639,379 +563,368 @@ export default function PaymentPage() {
                     </option>
                   ))}
                 </select>
+                <ChevronDown
+                  size={16}
+                  className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-stone-400"
+                />
+              </div>
 
-              </Field>
+              {selectedWork && (
+                <div className="mt-3 grid grid-cols-2 gap-3 rounded-2xl bg-stone-50 p-4 ring-1 ring-stone-100 sm:grid-cols-4">
+                  <DetailItem label="Work amount" value={formatCurrency(workTotalAmount)} />
+                  <DetailItem label="Already paid" value={formatCurrency(workPaidAmount)} />
+                  <DetailItem label="Remaining" value={formatCurrency(dueAmount)} color="red" />
+                  <DetailItem
+                    label="Work date"
+                    value={getDate(selectedWork.date || selectedWork.startTime)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Amount */}
+          <div>
+            <label htmlFor="amount" className={labelCls}>
+              {isAdvance ? "Advance amount" : "Payment amount"}
+            </label>
+            <div className="relative">
+              <IndianRupee
+                size={18}
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400"
+              />
+              <input
+                id="amount"
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                onWheel={(e) => e.currentTarget.blur()}
+                placeholder="0.00"
+                className={`${baseInput} py-4 pl-11 pr-4 text-xl font-extrabold tabular-nums ${
+                  amountInvalid
+                    ? "border-rose-300 focus:border-rose-500 focus:ring-rose-100"
+                    : "border-stone-200"
+                }`}
+              />
             </div>
 
-            {/* SELECTED WORK DETAILS */}
-
-            {selectedWork && (
-              <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-
-                <div className="mb-3 flex items-center gap-2">
-                  <Receipt size={18} className="text-slate-600" />
-
-                  <h3 className="font-semibold text-slate-800">
-                    Selected Work Details
-                  </h3>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-
-                  <DetailItem
-                    label="Work Amount"
-                    value={formatCurrency(workTotalAmount)}
-                  />
-
-                  <DetailItem
-                    label="Already Paid"
-                    value={formatCurrency(workPaidAmount)}
-                  />
-
-                  <DetailItem
-                    label="Remaining Due"
-                    value={formatCurrency(dueAmount)}
-                    color="red"
-                  />
-
-                  <DetailItem
-                    label="Work Date"
-                    value={getDate(
-                      selectedWork.date || selectedWork.startTime
-                    )}
-                  />
-
-                </div>
-
-              </div>
+            {amountInvalid && (
+              <p className="mt-1.5 text-xs font-medium text-rose-600">
+                Enter a valid amount greater than zero.
+              </p>
             )}
 
-            {/* PAYMENT AMOUNT */}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {!isAdvance && selectedWork && (
+                <>
+                  <QuickChip tone="emerald" onClick={() => setAmount(String(dueAmount))}>
+                    Pay full due
+                  </QuickChip>
+                  <QuickChip
+                    tone="stone"
+                    onClick={() => setAmount(String(Math.ceil(dueAmount / 2)))}
+                  >
+                    Pay half
+                  </QuickChip>
+                </>
+              )}
+              {isAdvance &&
+                [500, 1000, 2000, 5000].map((v) => (
+                  <QuickChip key={v} tone="amber" onClick={() => setAmount(String(v))}>
+                    ₹{v.toLocaleString("en-IN")}
+                  </QuickChip>
+                ))}
+            </div>
+          </div>
 
-            <div>
-              <Field label="Payment Amount">
-
-                <div className="relative">
-                  <IndianRupee
-                    size={17}
-                    className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-                  />
-
-                  <input
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="Enter amount"
-                    className={`w-full rounded-2xl border bg-white py-3 pl-10 pr-4 text-sm outline-none focus:ring-4 ${
-                      amountInvalid
-                        ? "border-rose-300 focus:border-rose-500 focus:ring-rose-100"
-                        : "border-slate-200 focus:border-emerald-500 focus:ring-emerald-100"
+          {/* Method */}
+          <div>
+            <span className={labelCls}>Payment method</span>
+            <div className="grid grid-cols-4 gap-2">
+              {PAYMENT_METHODS.map(({ id, label, icon: Icon }) => {
+                const active = paymentMethod === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setPaymentMethod(id)}
+                    aria-pressed={active}
+                    className={`flex flex-col items-center gap-1.5 rounded-2xl py-3 text-xs font-bold transition ${
+                      active
+                        ? isAdvance
+                          ? "bg-amber-500 text-white shadow-lg shadow-amber-500/25"
+                          : "bg-emerald-600 text-white shadow-lg shadow-emerald-600/25"
+                        : "bg-stone-50 text-stone-500 ring-1 ring-stone-200 hover:bg-stone-100"
                     }`}
+                  >
+                    <Icon size={18} />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Note */}
+          <div>
+            <label htmlFor="note" className={labelCls}>
+              Notes (optional)
+            </label>
+            <input
+              id="note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={
+                isAdvance
+                  ? "e.g. Advance received before field work"
+                  : "e.g. Received payment through UPI"
+              }
+              className={`${baseInput} border-stone-200 px-4 py-3.5`}
+            />
+          </div>
+
+          {/* Submit */}
+          <div className="flex flex-col gap-3 pt-1 sm:flex-row">
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-6 py-4 text-sm font-extrabold text-white shadow-lg transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 ${accentBtn}`}
+            >
+              {submitting ? (
+                <Loader2 size={17} className="animate-spin" />
+              ) : isAdvance ? (
+                <Wallet size={17} />
+              ) : (
+                <CreditCard size={17} />
+              )}
+              {submitting
+                ? "Saving..."
+                : amountReady
+                  ? `${isAdvance ? "Receive" : "Save"} ${formatCurrency(numericAmount)}`
+                  : isAdvance
+                    ? "Receive Advance"
+                    : "Save Work Payment"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              disabled={submitting}
+              className="rounded-2xl bg-stone-100 px-6 py-4 text-sm font-bold text-stone-600 transition hover:bg-stone-200 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        {/* ============ SIDE PANEL ============ */}
+        <aside className="space-y-4 lg:sticky lg:top-6 lg:col-span-2">
+          {/* Farmer summary */}
+          {selectedFarmer ? (
+            <div className="rounded-[2rem] bg-white p-6 shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-500 font-bold text-white shadow-md">
+                  {getInitials(getFarmerName(selectedFarmer))}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate font-extrabold text-stone-900">
+                    {getFarmerName(selectedFarmer)}
+                  </p>
+                  <p className="text-xs text-stone-400">Account summary</p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                <SummaryTile title="Billed" value={formatCurrency(farmerTotalBilled)} tone="sky" icon={Receipt} />
+                <SummaryTile title="Paid" value={formatCurrency(farmerTotalPaid)} tone="green" icon={CheckCircle2} />
+                <SummaryTile title="Due" value={formatCurrency(farmerTotalDue)} tone="red" icon={AlertCircle} />
+                <SummaryTile title="Advance" value={formatCurrency(existingAdvance)} tone="amber" icon={Wallet} />
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[2rem] border-2 border-dashed border-stone-200 bg-white/60 p-8 text-center">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-100 text-stone-300">
+                <User size={26} />
+              </div>
+              <p className="mt-3 text-sm font-bold text-stone-600">No farmer selected</p>
+              <p className="mt-1 text-xs text-stone-400">
+                Choose a farmer to see their account and a payment preview.
+              </p>
+            </div>
+          )}
+
+          {/* Preview: advance */}
+          {isAdvance && selectedFarmer && amountReady && (
+            <div className="rounded-[2rem] bg-gradient-to-br from-amber-400 to-orange-400 p-6 text-white shadow-lg shadow-amber-500/20">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <Wallet size={17} />
+                Advance Summary
+              </div>
+
+              <div className="mt-4 space-y-2.5 text-sm">
+                <PreviewRow label="Existing advance" value={formatCurrency(existingAdvance)} />
+                <PreviewRow label="New advance received" value={`+ ${formatCurrency(numericAmount)}`} />
+                <div className="border-t border-white/30 pt-3">
+                  <PreviewRow
+                    label="Estimated balance"
+                    value={formatCurrency(estimatedIndependentAdvance)}
+                    bold
                   />
                 </div>
-
-                {amountInvalid && (
-                  <p className="mt-1 text-xs text-rose-600">
-                    Enter a valid amount greater than zero.
-                  </p>
-                )}
-
-                {/* QUICK AMOUNT BUTTONS */}
-
-                {selectedWork && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-
-                    <button
-                      type="button"
-                      onClick={() => setAmount(String(dueAmount))}
-                      className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                    >
-                      Pay Full Due
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setAmount(String(Math.ceil(dueAmount / 2)))
-                      }
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                    >
-                      Pay Half
-                    </button>
-
-                  </div>
-                )}
-
-              </Field>
-            </div>
-
-            {/* PAYMENT METHOD */}
-
-            <div>
-              <Field label="Payment Method">
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                >
-                  {PAYMENT_METHODS.map((method) => (
-                    <option key={method} value={method}>
-                      {method}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-
-            {/* OVERPAYMENT WARNING */}
-
-            {isOverpayment && (
-              <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-
-                <div className="flex items-center gap-2 font-semibold text-amber-800">
-                  <AlertCircle size={18} />
-                  Extra Payment Detected
-                </div>
-
-                <p className="mt-2 text-sm text-amber-700">
-                  You are paying more than the current work due.
-                  The extra amount will be saved as farmer advance.
-                </p>
-
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-sm text-amber-700">
-                    Extra Amount
-                  </span>
-
-                  <span className="font-bold text-amber-900">
-                    {formatCurrency(newAdvance)}
-                  </span>
-                </div>
-
               </div>
-            )}
 
-            {/* PAYMENT SUMMARY */}
+              <p className="mt-4 rounded-xl bg-white/20 p-3 text-xs leading-relaxed">
+                Saved as an independent advance. No work is paid in this transaction;
+                future completed work can consume this balance automatically.
+              </p>
+            </div>
+          )}
 
-            {selectedWork &&
-              amount !== "" &&
-              !amountInvalid && (
-                <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
+          {/* Preview: work payment */}
+          {!isAdvance && selectedWork && amountReady && (
+            <div className="rounded-[2rem] bg-white p-6 shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5">
+              <div className="flex items-center gap-2 text-sm font-extrabold text-stone-800">
+                <TrendingUp size={17} className="text-emerald-600" />
+                Payment Breakdown
+              </div>
 
-                  <div className="mb-4 flex items-center gap-2">
-                    <TrendingUp
-                      size={18}
-                      className="text-emerald-600"
-                    />
+              <div className="mt-4 space-y-2.5 text-sm">
+                <BreakdownRow label="Total received" value={formatCurrency(numericAmount)} />
+                <BreakdownRow label="Applied to this work" value={formatCurrency(appliedAmount)} color="green" />
+                <BreakdownRow label="Remaining work due" value={formatCurrency(remainingDue)} color="red" />
+                {newAdvance > 0 && (
+                  <BreakdownRow label="New advance created" value={formatCurrency(newAdvance)} color="amber" />
+                )}
+                <div className="space-y-2.5 border-t border-stone-100 pt-3">
+                  <BreakdownRow label="Existing advance" value={formatCurrency(existingAdvance)} />
+                  <BreakdownRow
+                    label="Estimated advance"
+                    value={formatCurrency(estimatedAdvance)}
+                    color="amber"
+                    bold
+                  />
+                </div>
+              </div>
 
-                    <h3 className="font-semibold text-slate-800">
-                      Payment Breakdown
-                    </h3>
-                  </div>
-
-                  <div className="space-y-3 text-sm">
-
-                    <BreakdownRow
-                      label="Total Cash Received"
-                      value={formatCurrency(numericAmount)}
-                    />
-
-                    <BreakdownRow
-                      label="Applied to Current Work"
-                      value={formatCurrency(appliedAmount)}
-                      color="green"
-                    />
-
-                    <BreakdownRow
-                      label="Remaining Work Due"
-                      value={formatCurrency(remainingDue)}
-                      color="red"
-                    />
-
-                    {newAdvance > 0 && (
-                      <BreakdownRow
-                        label="New Advance Created"
-                        value={formatCurrency(newAdvance)}
-                        color="amber"
-                      />
-                    )}
-
-                    <div className="border-t border-slate-100 pt-3">
-
-                      <BreakdownRow
-                        label="Existing Advance"
-                        value={formatCurrency(existingAdvance)}
-                      />
-
-                      <BreakdownRow
-                        label="Estimated Advance Balance"
-                        value={formatCurrency(estimatedAdvance)}
-                        color="amber"
-                        bold
-                      />
-
-                    </div>
-
-                  </div>
-
-                  <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
-                    This is a preview. The saved balance will be
-                    calculated by the backend payment controller.
-                    Existing advance is displayed separately and is
-                    not automatically deducted from this work here.
-                  </p>
-
+              {isOverpayment && (
+                <div className="mt-4 flex items-start gap-2 rounded-2xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                  <AlertCircle size={15} className="mt-0.5 shrink-0" />
+                  You&apos;re paying {formatCurrency(newAdvance)} more than this work&apos;s
+                  due. The extra will be saved as farmer advance.
                 </div>
               )}
 
-            {/* NOTE */}
-
-            <div className="sm:col-span-2">
-              <Field label="Payment Notes (optional)">
-                <input
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Example: Received payment through UPI"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                />
-              </Field>
+              <p className="mt-3 text-[11px] text-stone-400">
+                This is a preview. The backend calculates and saves the actual allocation.
+              </p>
             </div>
-
-            {/* BUTTONS */}
-
-            <div className="sm:col-span-2 flex flex-col gap-3 sm:flex-row">
-
-              <PrimaryButton
-                type="submit"
-                disabled={!canSubmit}
-                className="flex items-center justify-center gap-2"
-              >
-                {submitting ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <CreditCard size={16} />
-                )}
-
-                {submitting ? "Saving Payment..." : "Save Payment"}
-              </PrimaryButton>
-
-              <button
-                type="button"
-                onClick={() => navigate(-1)}
-                disabled={submitting}
-                className="rounded-2xl border border-slate-200 px-5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-
-            </div>
-
-          </form>
-        </Card>
+          )}
+        </aside>
       </div>
 
-      {/* TOAST */}
-
+      {/* Toast */}
       {toast && (
         <div
-          className={`fixed bottom-6 right-4 z-50 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-lg sm:right-8 ${
-            toast.type === "success"
-              ? "bg-emerald-600"
-              : "bg-rose-600"
+          role="status"
+          className={`fixed bottom-6 right-4 z-50 flex max-w-[calc(100%-2rem)] items-center gap-2.5 rounded-2xl px-5 py-3.5 text-sm font-bold text-white shadow-2xl sm:right-8 ${
+            toast.type === "success" ? "bg-emerald-600" : "bg-rose-600"
           }`}
         >
-          {toast.type === "success" ? (
-            <CheckCircle2 size={17} />
-          ) : (
-            <AlertCircle size={17} />
-          )}
-
-          {toast.message}
+          {toast.type === "success" ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+          <span>{toast.message}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            aria-label="Dismiss"
+            className="ml-1 opacity-70 transition hover:opacity-100"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
-
     </div>
   );
 }
 
-// --------------------------------------------------
-// SUMMARY CARD
-// --------------------------------------------------
+/* ------------------------------ parts ------------------------------ */
 
-function SummaryCard({ title, value, icon, color }) {
-  const colors = {
-    blue: "bg-blue-50 border-blue-100 text-blue-700",
-    green: "bg-green-50 border-green-100 text-green-700",
-    red: "bg-rose-50 border-rose-100 text-rose-700",
-    amber: "bg-amber-50 border-amber-100 text-amber-700",
+function QuickChip({ tone = "stone", onClick, children }) {
+  const tones = {
+    emerald: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+    amber: "bg-amber-50 text-amber-800 hover:bg-amber-100",
+    stone: "bg-stone-100 text-stone-600 hover:bg-stone-200",
   };
-
   return (
-    <div
-      className={`rounded-2xl border p-3 ${colors[color]}`}
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${tones[tone]}`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium opacity-80">
-          {title}
-        </p>
-
-        {icon}
-      </div>
-
-      <p className="mt-2 break-words text-base font-bold sm:text-lg">
-        {value}
-      </p>
-    </div>
+      {children}
+    </button>
   );
 }
 
-// --------------------------------------------------
-// DETAIL ITEM
-// --------------------------------------------------
+function SummaryTile({ title, value, icon: Icon, tone }) {
+  const tones = {
+    sky: "bg-sky-50 text-sky-700",
+    green: "bg-emerald-50 text-emerald-700",
+    red: "bg-rose-50 text-rose-700",
+    amber: "bg-amber-50 text-amber-700",
+  };
+  return (
+    <div className={`rounded-2xl p-3.5 ${tones[tone]}`}>
+      <div className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide opacity-80">
+        {title}
+        <Icon size={14} />
+      </div>
+      <p className="mt-1.5 break-words text-base font-extrabold tabular-nums">{value}</p>
+    </div>
+  );
+}
 
 function DetailItem({ label, value, color = "default" }) {
-  const textColor =
-    color === "red" ? "text-rose-600" : "text-slate-800";
-
   return (
     <div>
-      <p className="text-xs text-slate-500">{label}</p>
-
-      <p className={`mt-1 text-sm font-semibold ${textColor}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">
+        {label}
+      </p>
+      <p
+        className={`mt-0.5 text-sm font-extrabold tabular-nums ${
+          color === "red" ? "text-rose-600" : "text-stone-800"
+        }`}
+      >
         {value}
       </p>
     </div>
   );
 }
 
-// --------------------------------------------------
-// BREAKDOWN ROW
-// --------------------------------------------------
-
-function BreakdownRow({
-  label,
-  value,
-  color = "default",
-  bold = false,
-}) {
+function BreakdownRow({ label, value, color = "default", bold = false }) {
   const colors = {
-    default: "text-slate-800",
+    default: "text-stone-800",
     green: "text-emerald-600",
     red: "text-rose-600",
     amber: "text-amber-700",
   };
-
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-slate-500">{label}</span>
+      <span className="text-stone-500">{label}</span>
+      <span className={`tabular-nums ${colors[color]} ${bold ? "font-extrabold" : "font-bold"}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
 
-      <span
-        className={`${colors[color]} ${
-          bold ? "font-bold" : "font-semibold"
-        }`}
-      >
+function PreviewRow({ label, value, bold = false }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-white/85">{label}</span>
+      <span className={`tabular-nums ${bold ? "text-lg font-extrabold" : "font-bold"}`}>
         {value}
       </span>
     </div>

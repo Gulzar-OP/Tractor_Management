@@ -1,8 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import PageHeader from "../../components/UI/PageHeader";
-import Card from "../../components/UI/Card";
-import PrimaryButton from "../../components/UI/PrimaryButton";
 import {
   ClipboardList,
   CheckCircle2,
@@ -12,6 +9,12 @@ import {
   X,
   Coins,
   Wallet,
+  TrendingUp,
+  Layers,
+  AlertTriangle,
+  RotateCcw,
+  Settings as SettingsIcon,
+  Tractor,
 } from "lucide-react";
 import axios from "axios";
 import TractorDetailsForm from "../../components/TractorDetailsForm";
@@ -19,15 +22,30 @@ import TractorDetailsForm from "../../components/TractorDetailsForm";
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 const API = `${API_BASE}/api`;
 
-// Server ka message mile to wahi dikhao, warna default
+// Show the server's message when there is one, otherwise a default
 const errMsg = (err, fallback) => err?.response?.data?.message || fallback;
+
+const rowKey = (r) => r._id || r.type;
+
+const isInvalidRate = (value) => {
+  const n = Number(value);
+  return value === "" || !Number.isFinite(n) || n < 0;
+};
+
+const inputBase =
+  "w-full rounded-2xl border bg-white py-3 text-sm font-semibold text-stone-800 outline-none transition placeholder:font-normal placeholder:text-stone-400 focus:ring-4";
+const inputOk =
+  "border-stone-200 focus:border-emerald-500 focus:ring-emerald-100";
+const inputBad = "border-rose-300 focus:border-rose-500 focus:ring-rose-100";
 
 export default function Settings() {
   const [rates, setRates] = useState([]);
+  const [original, setOriginal] = useState([]); // last saved snapshot
   const [loading, setLoading] = useState(true);
   const [savingRates, setSavingRates] = useState(false);
   const [addingRate, setAddingRate] = useState(false);
-  const [deletingId, setDeletingId] = useState(null);
+  const [deletingKey, setDeletingKey] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
 
@@ -39,7 +57,7 @@ export default function Settings() {
 
   useEffect(() => {
     fetchRates();
-    return () => clearTimeout(savedTimer.current); // page chhodne par timer band
+    return () => clearTimeout(savedTimer.current); // clear timer on unmount
   }, []);
 
   async function fetchRates() {
@@ -47,7 +65,9 @@ export default function Settings() {
     setError("");
     try {
       const res = await axios.get(`${API}/rate/rates`, { withCredentials: true });
-      setRates(res.data.rates || res.data.data || []);
+      const list = res.data.rates || res.data.data || [];
+      setRates(list);
+      setOriginal(list);
     } catch (err) {
       console.error(err);
       setError(errMsg(err, "Could not load rates. Please refresh."));
@@ -56,7 +76,13 @@ export default function Settings() {
     }
   }
 
-  // Typing ke dauran text hi rakho (taaki field khali karke naya number likh sako)
+  function flashSaved(msg) {
+    setSaved(msg);
+    clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(""), 2500);
+  }
+
+  // Keep the typed text as-is so the field can be cleared and retyped
   function updateRate(i, val) {
     setRates((prev) => {
       const next = [...prev];
@@ -65,26 +91,40 @@ export default function Settings() {
     });
   }
 
-  function flashSaved(msg) {
-    setSaved(msg);
-    clearTimeout(savedTimer.current);
-    savedTimer.current = setTimeout(() => setSaved(""), 2000);
-  }
+  /* ---------------- Derived ---------------- */
+
+  const dirty = useMemo(() => {
+    if (rates.length !== original.length) return true;
+    return rates.some((r, i) => {
+      const o = original[i];
+      return !o || r.type !== o.type || String(r.rate) !== String(o.rate);
+    });
+  }, [rates, original]);
+
+  const totalRates = rates.length;
+
+  const { avgRate, maxRate } = useMemo(() => {
+    const nums = rates.map((r) => Number(r.rate) || 0);
+    if (!nums.length) return { avgRate: 0, maxRate: 0 };
+    return {
+      avgRate: Math.round(nums.reduce((s, n) => s + n, 0) / nums.length),
+      maxRate: Math.max(...nums),
+    };
+  }, [rates]);
+
+  /* ---------------- Actions ---------------- */
 
   async function saveRates() {
-    // Save se pehle har rate check karo
-    for (const r of rates) {
-      const n = Number(r.rate);
-      if (r.rate === "" || !Number.isFinite(n) || n < 0) {
-        setError(`"${r.type}" ka rate sahi daalo (0 ya usse zyada)`);
-        return;
-      }
+    const bad = rates.find((r) => isInvalidRate(r.rate));
+    if (bad) {
+      setError(`Enter a valid rate for "${bad.type}" (0 or more)`);
+      return;
     }
 
     setSavingRates(true);
     setError("");
     try {
-      // unit hamesha "hour": billing per hour ke hisaab se hoti hai
+      // unit is always "hour": billing is per hour
       const payload = rates.map((r) => ({
         type: r.type,
         rate: Number(r.rate),
@@ -95,7 +135,10 @@ export default function Settings() {
         { rates: payload },
         { withCredentials: true }
       );
-      if (res.data.rates) setRates(res.data.rates);
+
+      const next = res.data.rates || rates.map((r) => ({ ...r, rate: Number(r.rate) }));
+      setRates(next);
+      setOriginal(next);
       flashSaved("Rates saved successfully");
     } catch (err) {
       console.error(err);
@@ -105,17 +148,26 @@ export default function Settings() {
     }
   }
 
+  function discardChanges() {
+    setRates(original);
+    setError("");
+  }
+
   async function addNewRate() {
     const type = newType.trim();
     if (!type) {
       setError("Please enter a work type name");
       return;
     }
-    const rateNum = newRate === "" ? NaN : Number(newRate);
-    if (!Number.isFinite(rateNum) || rateNum < 0) {
+    if (rates.some((r) => r.type.trim().toLowerCase() === type.toLowerCase())) {
+      setError(`"${type}" already exists`);
+      return;
+    }
+    if (isInvalidRate(newRate)) {
       setError("Please enter a valid rate");
       return;
     }
+    const rateNum = Number(newRate);
 
     setAddingRate(true);
     setError("");
@@ -125,11 +177,12 @@ export default function Settings() {
         { type, rate: rateNum, unit: "hour" },
         { withCredentials: true }
       );
-      // addRates ka response `workRate` me aata hai
+      // addRates returns the new rate under `workRate`
       const created =
         res.data.workRate || res.data.rate || res.data.data || { type, rate: rateNum };
 
       setRates((prev) => [...prev, created]);
+      setOriginal((prev) => [...prev, created]); // already saved, so not "unsaved"
       setNewType("");
       setNewRate("");
       setShowAddForm(false);
@@ -142,133 +195,169 @@ export default function Settings() {
     }
   }
 
-  // Pehle sirf screen se hat-ta tha, DB se nahi. Ab sach me delete hota hai.
-  async function deleteRate(i) {
-    const r = rates[i];
-    if (!window.confirm(`"${r.type}" delete karna hai? Purane kaam ke records par asar nahi padega.`)) {
-      return;
-    }
+  async function confirmDelete() {
+    const r = deleteTarget;
+    if (!r) return;
+    const key = rowKey(r);
 
-    // _id nahi hai to ye abhi tak save hi nahi hua, bas list se hata do
+    // No _id means it was never saved, so just drop it from the list
     if (!r._id) {
-      setRates((prev) => prev.filter((_, idx) => idx !== i));
+      setRates((prev) => prev.filter((x) => rowKey(x) !== key));
+      setOriginal((prev) => prev.filter((x) => rowKey(x) !== key));
+      setDeleteTarget(null);
       return;
     }
 
-    setDeletingId(r._id);
+    setDeletingKey(key);
     setError("");
     try {
       await axios.delete(`${API}/rate/${r._id}`, { withCredentials: true });
-      setRates((prev) => prev.filter((x) => x._id !== r._id));
-      flashSaved("Work type delete ho gaya");
+      setRates((prev) => prev.filter((x) => rowKey(x) !== key));
+      setOriginal((prev) => prev.filter((x) => rowKey(x) !== key));
+      flashSaved("Work type deleted");
     } catch (err) {
       console.error(err);
       setError(errMsg(err, "Could not delete work type. Try again."));
     } finally {
-      setDeletingId(null);
+      setDeletingKey(null);
+      setDeleteTarget(null);
     }
   }
 
-  const totalRates = rates.length;
-  const avgRate = totalRates
-    ? Math.round(rates.reduce((sum, r) => sum + (Number(r.rate) || 0), 0) / totalRates)
-    : 0;
+  /* ---------------- Loading ---------------- */
 
   if (loading) {
     return (
-      <div className="max-w-3xl flex items-center gap-2 text-slate-400 text-sm py-16 justify-center">
-        <Loader2 size={18} className="animate-spin" /> Loading rates...
+      <div className="mx-auto max-w-4xl space-y-6">
+        <div className="h-24 animate-pulse rounded-[2rem] bg-emerald-900/10" />
+        <div className="h-48 animate-pulse rounded-[2rem] bg-stone-200/70" />
+        <div className="h-80 animate-pulse rounded-[2rem] bg-stone-200/70" />
       </div>
     );
   }
 
-  return (
-    <div className="max-w-3xl">
-      <PageHeader title="Settings" subtitle="Manage your tractor details and default work rates" />
+  /* ---------------- Main ---------------- */
 
+  return (
+    <div className="mx-auto max-w-4xl space-y-6 pb-28">
+      {/* Header */}
+      <header className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-teal-800 p-6 text-white shadow-2xl shadow-emerald-950/20 sm:p-8">
+        <div className="pointer-events-none absolute -right-16 -top-20 h-60 w-60 rounded-full border-[36px] border-white/5" />
+        <div className="relative flex items-center gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/20 backdrop-blur">
+            <SettingsIcon size={26} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
+              Settings
+            </h1>
+            <p className="mt-1 text-sm text-emerald-100/80">
+              Manage your tractor details and default work rates
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {/* Error banner */}
       <AnimatePresence>
         {error && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            className="mb-4 px-4 py-2.5 rounded-xl bg-red-50 border border-red-100 text-red-600 text-sm flex items-center justify-between"
+            className="flex items-start justify-between gap-3 rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700 ring-1 ring-rose-200"
             role="alert"
           >
-            <span>{error}</span>
+            <span className="flex items-start gap-2">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              {error}
+            </span>
             <button
               onClick={() => setError("")}
-              aria-label="Error band karo"
-              className="text-red-400 hover:text-red-600"
+              aria-label="Dismiss error"
+              className="shrink-0 text-rose-400 transition hover:text-rose-600"
             >
-              <X size={14} />
+              <X size={16} />
             </button>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Tractor ki detail (sidebar ke Tractor Status me dikhti hai) */}
-      <div className="mb-6">
-        <TractorDetailsForm />
-      </div>
-
-      {/* Work Rates */}
-      <Card className="p-6 overflow-hidden relative">
-        <div className="absolute -top-10 -right-10 w-40 h-40 bg-green-50 rounded-full blur-2xl pointer-events-none" />
-
-        <div className="relative flex items-start justify-between mb-1">
-          <div>
-            <h3 className="font-semibold text-slate-900 text-lg">Manage Work Rates</h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Set the default hourly rate for each work type
-            </p>
+      {/* Tractor details */}
+      <section className="rounded-[2rem] bg-white p-6 shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5 sm:p-8">
+        <div className="mb-5 flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+            <Tractor size={20} />
           </div>
+          <div>
+            <h2 className="text-lg font-extrabold text-stone-900">Tractor Details</h2>
+            <p className="text-xs text-stone-400">Shown in the sidebar's Tractor Status</p>
+          </div>
+        </div>
+        <TractorDetailsForm />
+      </section>
+
+      {/* Work rates */}
+      <section className="relative overflow-hidden rounded-[2rem] bg-white p-6 shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5 sm:p-8">
+        <div className="pointer-events-none absolute -right-12 -top-12 h-44 w-44 rounded-full bg-emerald-100/60 blur-3xl" />
+
+        <div className="relative flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+              <Coins size={20} />
+            </div>
+            <div>
+              <h2 className="text-lg font-extrabold text-stone-900">Work Rates</h2>
+              <p className="text-xs text-stone-400">
+                Default hourly rate for each work type
+              </p>
+            </div>
+          </div>
+
           <motion.button
-            whileTap={{ scale: 0.95 }}
-            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.96 }}
             onClick={() => setShowAddForm((v) => !v)}
-            className="flex items-center gap-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 px-4 py-2 rounded-xl shadow-sm shadow-green-200 transition-colors shrink-0"
+            className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-bold transition ${
+              showAddForm
+                ? "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                : "bg-emerald-600 text-white shadow-lg shadow-emerald-600/25 hover:bg-emerald-700"
+            }`}
           >
             <motion.span
               animate={{ rotate: showAddForm ? 45 : 0 }}
               transition={{ duration: 0.2 }}
               className="flex"
             >
-              <Plus size={15} />
+              <Plus size={16} />
             </motion.span>
             {showAddForm ? "Cancel" : "Add Work Type"}
           </motion.button>
         </div>
 
+        {/* Stats */}
         {totalRates > 0 && (
-          <div className="relative flex flex-wrap gap-3 mt-4 mb-5">
-            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-100">
-              <ClipboardList size={14} className="text-green-600" />
-              <span className="text-xs text-slate-500">
-                <span className="font-semibold text-slate-800">{totalRates}</span> work type
-                {totalRates !== 1 ? "s" : ""}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-100">
-              <Wallet size={14} className="text-green-600" />
-              <span className="text-xs text-slate-500">
-                Avg <span className="font-semibold text-slate-800">₹{avgRate}</span>/hour
-              </span>
-            </div>
+          <div className="relative mt-6 grid grid-cols-3 gap-3">
+            <MiniStat icon={Layers} label="Work types" value={totalRates} />
+            <MiniStat icon={Wallet} label="Average" value={`₹${avgRate}/hr`} />
+            <MiniStat icon={TrendingUp} label="Highest" value={`₹${maxRate}/hr`} />
           </div>
         )}
 
+        {/* Add form */}
         <AnimatePresence>
           {showAddForm && (
             <motion.div
-              initial={{ height: 0, opacity: 0, marginBottom: 0 }}
-              animate={{ height: "auto", opacity: 1, marginBottom: 20 }}
-              exit={{ height: 0, opacity: 0, marginBottom: 0 }}
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
               transition={{ duration: 0.25, ease: "easeOut" }}
-              className="overflow-hidden relative"
+              className="relative overflow-hidden"
             >
-              <div className="p-4 rounded-2xl border border-dashed border-green-300 bg-green-50/50">
-                <div className="flex flex-col sm:flex-row gap-3">
+              <div className="mt-6 rounded-3xl border-2 border-dashed border-emerald-300 bg-emerald-50/60 p-4">
+                <p className="mb-3 text-xs font-bold uppercase tracking-wider text-emerald-700">
+                  New work type
+                </p>
+                <div className="flex flex-col gap-3 sm:flex-row">
                   <input
                     autoFocus
                     type="text"
@@ -277,10 +366,11 @@ export default function Settings() {
                     onKeyDown={(e) => e.key === "Enter" && addNewRate()}
                     placeholder="e.g. Rotavator, Harvesting..."
                     maxLength={50}
-                    className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-green-200 focus:border-green-400"
+                    className={`${inputBase} ${inputOk} flex-1 px-4`}
                   />
-                  <div className="relative w-full sm:w-40">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+
+                  <div className="relative sm:w-40">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-stone-400">
                       ₹
                     </span>
                     <input
@@ -290,119 +380,171 @@ export default function Settings() {
                       value={newRate}
                       onChange={(e) => setNewRate(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && addNewRate()}
-                      placeholder="Rate"
-                      className="w-full pl-7 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-green-200 focus:border-green-400"
+                      onWheel={(e) => e.currentTarget.blur()}
+                      placeholder="Rate / hr"
+                      className={`${inputBase} ${inputOk} pl-8 pr-3`}
                     />
                   </div>
-                  <motion.button
-                    whileTap={{ scale: 0.95 }}
+
+                  <button
                     onClick={addNewRate}
                     disabled={addingRate}
-                    className="flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-green-600 text-white text-sm font-medium hover:bg-green-700 transition-colors disabled:opacity-60"
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-emerald-700 active:scale-[0.97] disabled:opacity-60"
                   >
                     {addingRate ? (
-                      <Loader2 size={15} className="animate-spin" />
+                      <Loader2 size={16} className="animate-spin" />
                     ) : (
-                      <Plus size={15} />
+                      <Plus size={16} />
                     )}
                     Add
-                  </motion.button>
+                  </button>
                 </div>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {rates.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="relative text-center py-14 text-slate-400"
-          >
-            <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto mb-3">
-              <Coins size={24} className="opacity-40" />
+        {/* Rate list */}
+        <div className="relative mt-6">
+          {rates.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="rounded-3xl border-2 border-dashed border-stone-200 py-14 text-center"
+            >
+              <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-100 text-stone-400">
+                <Coins size={24} />
+              </div>
+              <p className="text-sm font-bold text-stone-600">No work rates yet</p>
+              <p className="mt-1 text-xs text-stone-400">
+                Click &quot;Add Work Type&quot; to create your first one.
+              </p>
+            </motion.div>
+          ) : (
+            <div className="space-y-2.5">
+              <AnimatePresence initial={false}>
+                {rates.map((r, i) => {
+                  const key = rowKey(r);
+                  const invalid = isInvalidRate(r.rate);
+                  const changed =
+                    original[i] && String(original[i].rate) !== String(r.rate);
+
+                  return (
+                    <motion.div
+                      key={key}
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, x: -24 }}
+                      transition={{ duration: 0.2, delay: i * 0.03 }}
+                      className="group flex items-center gap-3 rounded-2xl bg-stone-50 p-3 ring-1 ring-stone-100 transition hover:bg-white hover:shadow-md hover:shadow-stone-900/5 sm:gap-4 sm:p-3.5"
+                    >
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm">
+                        <ClipboardList size={18} />
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-bold text-stone-800">
+                          {r.type}
+                        </p>
+                        <p className="text-xs text-stone-400">
+                          {changed ? (
+                            <span className="font-semibold text-amber-600">
+                              Edited — unsaved
+                            </span>
+                          ) : (
+                            "per hour"
+                          )}
+                        </p>
+                      </div>
+
+                      <div className="relative w-28 shrink-0 sm:w-40">
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-stone-400">
+                          ₹
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          inputMode="decimal"
+                          value={r.rate}
+                          onChange={(e) => updateRate(i, e.target.value)}
+                          onWheel={(e) => e.currentTarget.blur()}
+                          aria-label={`Rate for ${r.type}`}
+                          aria-invalid={invalid}
+                          className={`${inputBase} ${
+                            invalid ? inputBad : inputOk
+                          } py-2.5 pl-8 pr-9`}
+                        />
+                        <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 text-xs font-medium text-stone-400 sm:block">
+                          /hr
+                        </span>
+                      </div>
+
+                      {/* Always visible on mobile (no hover), hover-only on desktop */}
+                      <button
+                        onClick={() => setDeleteTarget(r)}
+                        disabled={deletingKey === key}
+                        title="Delete work type"
+                        aria-label={`Delete ${r.type}`}
+                        className="shrink-0 rounded-xl p-2 text-stone-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      >
+                        {deletingKey === key ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
+                      </button>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
             </div>
-            <p className="text-sm">No work rates yet.</p>
-            <p className="text-xs mt-1">Click "Add Work Type" above to create one.</p>
-          </motion.div>
-        ) : (
-          <div className="relative space-y-2.5">
-            <AnimatePresence initial={false}>
-              {rates.map((r, i) => (
-                <motion.div
-                  key={r._id || r.type}
-                  layout
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{
-                    opacity: 0,
-                    x: -20,
-                    height: 0,
-                    marginBottom: 0,
-                    paddingTop: 0,
-                    paddingBottom: 0,
-                  }}
-                  transition={{ duration: 0.2, delay: i * 0.03 }}
-                  className="group flex items-center gap-3 sm:gap-4 p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100/80 hover:shadow-sm transition-all overflow-hidden"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-white shadow-sm flex items-center justify-center text-green-600 shrink-0">
-                    <ClipboardList size={16} />
-                  </div>
-                  <span className="font-medium text-slate-700 flex-1 truncate">{r.type}</span>
-                  <div className="relative w-28 sm:w-36 shrink-0">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
-                      ₹
-                    </span>
-                    <input
-                      type="number"
-                      min="0"
-                      inputMode="decimal"
-                      value={r.rate}
-                      onChange={(e) => updateRate(i, e.target.value)}
-                      aria-label={`${r.type} ka rate`}
-                      className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-green-200 focus:border-green-400"
-                    />
-                  </div>
-                  <span className="hidden sm:block text-xs text-slate-400 w-10 shrink-0">/hour</span>
-                  {/* Mobile pe hover nahi hota, isliye wahan hamesha dikhta hai */}
-                  <button
-                    onClick={() => deleteRate(i)}
-                    disabled={deletingId === r._id}
-                    title="Delete work type"
-                    aria-label={`${r.type} delete karo`}
-                    className="sm:opacity-0 sm:group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all shrink-0 disabled:opacity-50"
-                  >
-                    {deletingId === r._id ? (
-                      <Loader2 size={15} className="animate-spin" />
-                    ) : (
-                      <Trash2 size={15} />
-                    )}
-                  </button>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-        )}
-
-        <div className="relative mt-6 flex items-center gap-3">
-          <PrimaryButton onClick={saveRates} icon={CheckCircle2} disabled={savingRates}>
-            {savingRates ? "Saving..." : "Save Changes"}
-          </PrimaryButton>
-          <AnimatePresence>
-            {saved && (
-              <motion.span
-                initial={{ opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0 }}
-                className="text-xs text-green-600 font-medium flex items-center gap-1"
-              >
-                <CheckCircle2 size={13} /> {saved}
-              </motion.span>
-            )}
-          </AnimatePresence>
+          )}
         </div>
-      </Card>
+      </section>
 
+      {/* Sticky unsaved-changes bar */}
+      <AnimatePresence>
+        {dirty && (
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 30 }}
+            transition={{ type: "spring", stiffness: 380, damping: 30 }}
+            className="fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-xl items-center justify-between gap-3 rounded-2xl bg-stone-900 p-3 pl-5 text-white shadow-2xl shadow-black/30"
+          >
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+              Unsaved changes
+            </span>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={discardChanges}
+                disabled={savingRates}
+                className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
+              >
+                <RotateCcw size={14} />
+                Discard
+              </button>
+              <button
+                onClick={saveRates}
+                disabled={savingRates}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-emerald-400 active:scale-[0.97] disabled:opacity-60"
+              >
+                {savingRates ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <CheckCircle2 size={15} />
+                )}
+                {savingRates ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Success toast (single source of feedback) */}
       <AnimatePresence>
         {saved && (
           <motion.div
@@ -410,14 +552,85 @@ export default function Settings() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.9 }}
             transition={{ type: "spring", stiffness: 400, damping: 25 }}
-            className="toast fixed bottom-8 right-8 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-2"
+            className={`fixed right-4 z-50 flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-stone-800 shadow-2xl shadow-stone-900/15 ring-1 ring-stone-900/5 sm:right-8 ${
+              dirty ? "bottom-24" : "bottom-6 sm:bottom-8"
+            }`}
             role="status"
           >
-            <CheckCircle2 size={16} className="text-green-400" />
+            <CheckCircle2 size={18} className="text-emerald-500" />
             {saved}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Delete confirmation */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 p-4 backdrop-blur-sm"
+            onClick={() => !deletingKey && setDeleteTarget(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.92, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.92, y: 10 }}
+              className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">
+                <Trash2 size={22} />
+              </div>
+
+              <h3 className="mt-4 text-lg font-extrabold text-stone-900">
+                Delete &quot;{deleteTarget.type}&quot;?
+              </h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-stone-500">
+                This work type will be removed permanently. Existing work records
+                will not be affected.
+              </p>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={Boolean(deletingKey)}
+                  className="flex-1 rounded-2xl bg-stone-100 px-4 py-3 text-sm font-bold text-stone-700 transition hover:bg-stone-200 disabled:opacity-50"
+                >
+                  Keep it
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  disabled={Boolean(deletingKey)}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-rose-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60"
+                >
+                  {deletingKey && <Loader2 size={15} className="animate-spin" />}
+                  {deletingKey ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+function MiniStat({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-2xl bg-stone-50 p-4 ring-1 ring-stone-100">
+      <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-stone-400">
+        <Icon size={13} className="text-emerald-600" />
+        {label}
+      </div>
+      <p className="mt-1.5 text-lg font-extrabold tabular-nums text-stone-900">
+        {value}
+      </p>
     </div>
   );
 }
