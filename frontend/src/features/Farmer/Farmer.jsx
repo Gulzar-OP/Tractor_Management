@@ -27,16 +27,36 @@ import {
   IndianRupee,
   RefreshCw,
   TrendingUp,
+  Plus,
+  UserPlus,
+  Save,
+  MapPinned,
+  FileText,
 } from "lucide-react";
 import { HiOutlineMagnifyingGlass } from "react-icons/hi2";
+import { IoMicOutline } from "react-icons/io5";
+import { FiMicOff } from "react-icons/fi";
 import { inr } from "../../data/mockData";
 import { FaRegTrashCan } from "react-icons/fa6";
 
 const PER_PAGE = 5;
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
-const FARMERS_URL = `${API_BASE}/api/farmer/all-farmer`;
+const API = `${API_BASE}/api`;
+
+const FARMERS_URL = `${API}/farmer/all-farmer`;
+const ADD_FARMER_URL = `${API}/farmer`;
+
 const DELETE_FARMER_URL = (id) =>
-  `${API_BASE}/api/farmer/deleteFarmer/${id}`;
+  `${API}/farmer/deleteFarmer/${id}`;
+
+const EMPTY_FORM = {
+  name: "",
+  fatherName: "",
+  phone: "",
+  village: "",
+  address: "",
+  notes: "",
+};
 
 const AVATAR_THEMES = [
   "from-emerald-500 to-teal-500",
@@ -86,7 +106,9 @@ function SummaryCard({ title, value, icon: Icon, color, description }) {
           <p className="mt-2 truncate text-xl font-bold text-slate-800 sm:text-2xl">
             {value}
           </p>
-          <p className="mt-1 text-[11px] text-slate-400">{description}</p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {description}
+          </p>
         </div>
 
         <div
@@ -120,9 +142,35 @@ export default function Farmers() {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
 
-  const recognitionRef = useRef(null);
+  // Add farmer modal state
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  const [addSubmitting, setAddSubmitting] = useState(false);
+  const [addListening, setAddListening] = useState(false);
+  const [toast, setToast] = useState(null);
 
-  // Voice search
+  // Separate refs for search and add farmer voice input
+  const recognitionRef = useRef(null);
+  const addRecognitionRef = useRef(null);
+  const toastTimerRef = useRef(null);
+
+  // Toast
+  const showToast = useCallback((type, message) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+
+    setToast({ type, message });
+
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+    }, 2500);
+  }, []);
+
+  // =====================================================
+  // VOICE SEARCH
+  // =====================================================
+
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -161,7 +209,11 @@ export default function Farmers() {
     if (!recognitionRef.current) return;
 
     try {
-      recognitionRef.current.start();
+      if (listening) {
+        recognitionRef.current.stop();
+      } else {
+        recognitionRef.current.start();
+      }
     } catch (err) {
       console.error("Speech recognition failed:", err);
     }
@@ -174,7 +226,10 @@ export default function Farmers() {
     setPageNum(1);
   };
 
-  // Fetch farmers
+  // =====================================================
+  // FETCH FARMERS
+  // =====================================================
+
   const fetchFarmers = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -194,8 +249,13 @@ export default function Farmers() {
 
       setData(Array.isArray(farmers) ? farmers : []);
     } catch (e) {
-      console.error("Error fetching farmers:", e);
-      setError("Couldn't load farmers. Please try again.");
+      console.error("Error fetching farmers:", e.response?.data || e);
+
+      setError(
+        e.response?.data?.message ||
+        "Couldn't load farmers. Please try again."
+      );
+
       setData([]);
     } finally {
       setLoading(false);
@@ -211,7 +271,184 @@ export default function Farmers() {
     fetchFarmers();
   }, [authLoading, isLoggedIn, fetchFarmers]);
 
-  // Summary calculations
+  // =====================================================
+  // ADD FARMER FORM
+  // =====================================================
+
+  const handleAddChange = (e) => {
+    const { name, value } = e.target;
+
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const parseVoiceText = (text) => {
+const nameMatch = text.match(
+  /नाम\s+(.+?)(?=\s*(?:फादर नेम|पिता का नाम|पिताजी का नाम|पिता जी का नाम|बाप का नाम|पापा का नाम|फोन नंबर|मोबाइल नंबर|विलेज|गांव|गाँव|पता|एड्रेस|$))/
+);
+
+const fatherMatch = text.match(
+  /(?:फादर नेम|पिता का नाम|पिताजी का नाम|पिता जी का नाम|पिताजी|पिता|बाप का नाम|बाप का|पापा का नाम|पापा)\s+(.+?)(?=\s*(?:नाम|फोन नंबर|मोबाइल नंबर|विलेज|गांव|गाँव|पता|एड्रेस|$))/
+);
+
+    const villageMatch = text.match(
+      /(?:विलेज|गांव|गाँव)\s+(.+?)(?=\s*(?:नाम|फादर नेम|फोन नंबर|मोबाइल नंबर|पता|एड्रेस|$))/
+    );
+
+    const addressMatch = text.match(
+      /(?:पता|एड्रेस)\s+(.+)/
+    );
+
+    const phoneMatch = text.match(/\d[\d\s]{8,13}\d/);
+
+    return {
+      name: nameMatch?.[1]?.trim() || "",
+      fatherName: fatherMatch?.[1]?.trim() || "",
+      phone: phoneMatch ? phoneMatch[0].replace(/\s/g, "") : "",
+      village: villageMatch?.[1]?.trim() || "",
+      address: addressMatch?.[1]?.trim() || "",
+    };
+  };
+
+  const stopAddListening = () => {
+    addRecognitionRef.current?.stop();
+  };
+
+  const startAddListening = () => {
+    if (addListening) {
+      stopAddListening();
+      return;
+    }
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      showToast(
+        "error",
+        "Speech recognition is not supported in this browser."
+      );
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+
+    recognition.lang = "hi-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      const parsed = parseVoiceText(transcript);
+
+      setFormData((prev) => ({
+        ...prev,
+        ...Object.fromEntries(
+          Object.entries(parsed).filter(([, value]) => value)
+        ),
+      }));
+    };
+
+    recognition.onerror = () => {
+      setAddListening(false);
+      showToast("error", "Couldn't catch that. Please try again.");
+    };
+
+    recognition.onstart = () => setAddListening(true);
+    recognition.onend = () => setAddListening(false);
+
+    addRecognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("Add farmer voice recognition failed:", err);
+      setAddListening(false);
+    }
+  };
+
+  const closeAddModal = () => {
+    if (addSubmitting) return;
+
+    stopAddListening();
+    setShowAddModal(false);
+    setFormData(EMPTY_FORM);
+  };
+
+  const submitAddFarmer = async (e) => {
+    e.preventDefault();
+
+    if (addSubmitting) return;
+
+    if (!formData.name.trim()) {
+      showToast("error", "Farmer name is required.");
+      return;
+    }
+
+    setAddSubmitting(true);
+
+    try {
+      await axios.post(
+        ADD_FARMER_URL,
+        {
+          ...formData,
+          name: formData.name.trim(),
+          fatherName: formData.fatherName.trim(),
+          phone: formData.phone.trim(),
+          village: formData.village.trim(),
+          address: formData.address.trim(),
+          notes: formData.notes.trim(),
+        },
+        {
+          withCredentials: true,
+        }
+      );
+
+      setShowAddModal(false);
+      setFormData(EMPTY_FORM);
+
+      showToast("success", "Farmer added successfully!");
+
+      // Refresh farmer list after successful creation
+      await fetchFarmers();
+
+      setSearch("");
+      setFilter("all");
+      setPageNum(1);
+    } catch (err) {
+      console.error(
+        "Failed to add farmer:",
+        err.response?.data || err
+      );
+
+      showToast(
+        "error",
+        err.response?.data?.message ||
+          "Couldn't save farmer. Please try again."
+      );
+    } finally {
+      setAddSubmitting(false);
+    }
+  };
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+      addRecognitionRef.current?.stop();
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  // =====================================================
+  // SUMMARY CALCULATIONS
+  // =====================================================
+
   const summary = useMemo(() => {
     return data.reduce(
       (acc, farmer) => {
@@ -239,7 +476,10 @@ export default function Farmers() {
     );
   }, [data]);
 
-  // Search and filters
+  // =====================================================
+  // SEARCH AND FILTERS
+  // =====================================================
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
@@ -271,7 +511,11 @@ export default function Farmers() {
     });
   }, [data, search, filter]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filtered.length / PER_PAGE)
+  );
+
   const currentPage = Math.min(pageNum, totalPages);
 
   const paged = filtered.slice(
@@ -279,49 +523,54 @@ export default function Farmers() {
     currentPage * PER_PAGE
   );
 
-  // Delete farmer
+  // =====================================================
+  // DELETE FARMER
+  // =====================================================
 
-const handleDelete = async (e, farmerId, farmerName) => {
-  e.stopPropagation();
+  const handleDelete = async (e, farmerId, farmerName) => {
+    e.stopPropagation();
 
-  const confirmed = window.confirm(
-    `Permanently delete ${farmerName || "this farmer"} and all related works and payments? This action cannot be undone.`
-  );
-
-  if (!confirmed) return;
-
-  setDeletingId(farmerId);
-  setError(null);
-
-  try {
-    const response = await axios.delete(
-      DELETE_FARMER_URL(farmerId),
-      {
-        withCredentials: true,
-      }
+    const confirmed = window.confirm(
+      `Permanently delete ${farmerName || "this farmer"} and all related works and payments? This action cannot be undone.`
     );
 
-    setData((prev) =>
-      prev.filter((farmer) => farmer._id !== farmerId)
-    );
+    if (!confirmed) return;
 
-  } catch (err) {
-    console.error(
-      "Error deleting farmer:",
-      err.response?.data || err
-    );
+    setDeletingId(farmerId);
+    setError(null);
 
-    setError(
-      err.response?.data?.message ||
-      "Couldn't delete farmer. Please try again."
-    );
-  } finally {
-    setDeletingId(null);
-  }
-};
+    try {
+      await axios.delete(
+        DELETE_FARMER_URL(farmerId),
+        {
+          withCredentials: true,
+        }
+      );
 
+      setData((prev) =>
+        prev.filter((farmer) => farmer._id !== farmerId)
+      );
 
-  // Auth loading
+      showToast("success", "Farmer deleted successfully.");
+    } catch (err) {
+      console.error(
+        "Error deleting farmer:",
+        err.response?.data || err
+      );
+
+      setError(
+        err.response?.data?.message ||
+          "Couldn't delete farmer. Please try again."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // =====================================================
+  // AUTH LOADING
+  // =====================================================
+
   if (authLoading) {
     return (
       <div className="space-y-6 px-3 sm:px-0">
@@ -332,7 +581,10 @@ const handleDelete = async (e, farmerId, farmerName) => {
     );
   }
 
-  // Not logged in
+  // =====================================================
+  // NOT LOGGED IN
+  // =====================================================
+
   if (!isLoggedIn) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center px-4">
@@ -363,12 +615,30 @@ const handleDelete = async (e, farmerId, farmerName) => {
     );
   }
 
+  // =====================================================
+  // MAIN UI
+  // =====================================================
+
   return (
     <div className="space-y-5 px-3 sm:space-y-6 sm:px-0">
-      <PageHeader
-        title="Farmers"
-        subtitle="Manage farmer records, payments and advance balances"
-      />
+      {/* Header + Add Farmer */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <PageHeader
+            title="Farmers"
+            subtitle="Manage farmer records, payments and advance balances"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowAddModal(true)}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-700 to-emerald-500 px-5 py-3 text-sm font-semibold text-white shadow-md shadow-emerald-200/60 transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+        >
+          <Plus size={18} />
+          Add Farmer
+        </button>
+      </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -437,7 +707,7 @@ const handleDelete = async (e, farmerId, farmerName) => {
           {supported && (
             <button
               type="button"
-              onClick={listening ? stopListening : handleMicClick}
+              onClick={handleMicClick}
               className={`absolute right-3.5 top-2 transition ${
                 listening
                   ? "text-red-500"
@@ -802,6 +1072,287 @@ const handleDelete = async (e, farmerId, farmerName) => {
           >
             Next
           </button>
+        </div>
+      )}
+
+      {/* =================================================
+          ADD FARMER MODAL
+      ================================================= */}
+
+      {showAddModal && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-3 backdrop-blur-sm sm:p-5"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              closeAddModal();
+            }
+          }}
+        >
+          <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            {/* Modal header */}
+            <div className="relative shrink-0 overflow-hidden border-b border-emerald-100 bg-gradient-to-r from-emerald-50 via-white to-green-50 px-5 py-5 sm:px-7">
+              <div className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-emerald-200/40 blur-3xl" />
+
+              <div className="relative flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-500 text-white shadow-md shadow-emerald-200">
+                    <UserPlus size={22} />
+                  </div>
+
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800">
+                      Add New Farmer
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Create a new farmer profile
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={closeAddModal}
+                  disabled={addSubmitting}
+                  className="rounded-xl p-2 text-slate-400 transition hover:bg-white hover:text-slate-700 disabled:opacity-40"
+                  aria-label="Close modal"
+                >
+                  <X size={21} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal form */}
+            <form
+              onSubmit={submitAddFarmer}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <div className="flex-1 space-y-5 overflow-y-auto p-5 sm:p-7">
+                {/* Voice input */}
+                <div className="flex flex-col gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm">
+                      <Mic size={19} />
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">
+                        Voice Input
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Hindi mein farmer details boliye
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={startAddListening}
+                    disabled={addSubmitting}
+                    className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:opacity-50 ${
+                      addListening
+                        ? "bg-red-50 text-red-600 ring-1 ring-red-200"
+                        : "bg-emerald-600 text-white shadow-sm hover:bg-emerald-700"
+                    }`}
+                  >
+                    {addListening ? (
+                      <>
+                        <FiMicOff size={18} />
+                        Stop Listening
+                      </>
+                    ) : (
+                      <>
+                        <IoMicOutline size={19} />
+                        Speak Details
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {addListening && (
+                  <p className="flex items-center gap-2 text-xs font-medium text-red-500">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                    Listening... Hindi mein details boliye.
+                  </p>
+                )}
+
+                {/* Basic details */}
+                <div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <UserPlus size={16} className="text-emerald-600" />
+                    <h3 className="text-sm font-semibold text-slate-700">
+                      Personal Information
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+                        Farmer Name <span className="text-red-500">*</span>
+                      </label>
+
+                      <input
+                        name="name"
+                        value={formData.name}
+                        onChange={handleAddChange}
+                        placeholder="Enter farmer name"
+                        required
+                        disabled={addSubmitting}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+                        Father Name
+                      </label>
+
+                      <input
+                        name="fatherName"
+                        value={formData.fatherName}
+                        onChange={handleAddChange}
+                        placeholder="Enter father name"
+                        disabled={addSubmitting}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+                        Phone Number
+                      </label>
+
+                      <div className="relative">
+                        <Phone
+                          size={16}
+                          className="absolute left-3.5 top-3.5 text-slate-400"
+                        />
+
+                        <input
+                          name="phone"
+                          type="tel"
+                          value={formData.phone}
+                          onChange={handleAddChange}
+                          placeholder="Enter phone number"
+                          disabled={addSubmitting}
+                          className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+                        Village
+                      </label>
+
+                      <div className="relative">
+                        <MapPin
+                          size={16}
+                          className="absolute left-3.5 top-3.5 text-slate-400"
+                        />
+
+                        <input
+                          name="village"
+                          value={formData.village}
+                          onChange={handleAddChange}
+                          placeholder="Enter village"
+                          disabled={addSubmitting}
+                          className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Address */}
+                <div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <MapPinned size={16} className="text-emerald-600" />
+                    <h3 className="text-sm font-semibold text-slate-700">
+                      Address Details
+                    </h3>
+                  </div>
+
+                  <textarea
+                    name="address"
+                    value={formData.address}
+                    onChange={handleAddChange}
+                    rows={2}
+                    placeholder="Enter complete address..."
+                    disabled={addSubmitting}
+                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
+                  />
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <FileText size={16} className="text-emerald-600" />
+                    <h3 className="text-sm font-semibold text-slate-700">
+                      Additional Notes
+                    </h3>
+                  </div>
+
+                  <textarea
+                    name="notes"
+                    value={formData.notes}
+                    onChange={handleAddChange}
+                    rows={3}
+                    placeholder="Any additional information about this farmer..."
+                    disabled={addSubmitting}
+                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
+                  />
+                </div>
+              </div>
+
+              {/* Modal footer */}
+              <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-4 sm:flex-row sm:justify-end sm:px-7">
+                <button
+                  type="button"
+                  onClick={closeAddModal}
+                  disabled={addSubmitting}
+                  className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={addSubmitting || !formData.name.trim()}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-700 to-emerald-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-emerald-200/60 transition hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {addSubmitting ? (
+                    <>
+                      <Loader2 size={17} className="animate-spin" />
+                      Saving Farmer...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={17} />
+                      Save Farmer
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed bottom-5 right-4 z-[120] flex max-w-sm items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-xl sm:bottom-8 sm:right-8 ${
+            toast.type === "error"
+              ? "bg-red-600"
+              : "bg-emerald-700"
+          }`}
+        >
+          {toast.type === "success" ? (
+            <Sprout size={17} />
+          ) : (
+            <X size={17} />
+          )}
+          {toast.message}
         </div>
       )}
     </div>
