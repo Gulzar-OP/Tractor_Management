@@ -78,11 +78,11 @@ export default function DueSummary() {
       setLoading(true);
       setError("");
 
-      const response = await axios.post(
-        `${API}/farmer/all-farmer`,
-        {},
+      const response = await axios.get(
+        `${API}/work/due-summary`,
         { withCredentials: true }
       );
+      console.log(response)
 
       const list =
         response.data?.farmers || response.data?.all || response.data?.data || [];

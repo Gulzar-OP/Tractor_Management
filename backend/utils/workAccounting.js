@@ -4,7 +4,7 @@ import Farmer from "../models/farmer.model.js";
 import FarmerAdvanceLedger from "../models/farmerAdvanceLedger.model.js";
 import FarmerAdvanceLot from "../models/farmerAdvanceLot.model.js";
 import FarmerAdvanceAllocation from "../models/farmerAdvanceAllocation.model.js";
-
+import mongoose from "mongoose";
 const round2 = (value) =>
   Math.round(
     (Number(value) + Number.EPSILON) * 100
@@ -458,62 +458,174 @@ export const restoreWorkAdvanceAllocations = async ({
 
 export const syncFarmerSummary = async (
   farmerId,
-  ownerId,
-  session
+  owner,
+  session = null
 ) => {
-  const [summary] = await WorkLog.aggregate([
-    {
-      $match: {
-        farmer: farmerId,
-        owner: ownerId,
-      },
-    },
-    {
-      $group: {
-        _id: null,
-        totalWorkMinutes: {
-          $sum: "$totalMinutes",
-        },
-        totalBilledAmount: {
-          $sum: "$totalAmount",
-        },
-        totalPaidAmount: {
-          $sum: "$paidAmount",
-        },
-        totalDueAmount: {
-          $sum: "$dueAmount",
-        },
-        lastWorkDate: {
-          $max: "$date",
+  try {
+    const farmerObjectId = new mongoose.Types.ObjectId(
+      farmerId
+    );
+
+    const ownerObjectId = new mongoose.Types.ObjectId(
+      owner
+    );
+
+    // =========================================
+    // 1. AGGREGATE WORK LOGS
+    // =========================================
+
+    const aggregation = WorkLog.aggregate([
+      {
+        $match: {
+          farmer: farmerObjectId,
+          owner: ownerObjectId,
         },
       },
-    },
-  ]).session(session);
+      {
+        $group: {
+          _id: "$farmer",
 
-  const data = summary || {
-    totalWorkMinutes: 0,
-    totalBilledAmount: 0,
-    totalPaidAmount: 0,
-    totalDueAmount: 0,
-    lastWorkDate: null,
-  };
+          totalWorkMinutes: {
+            $sum: {
+              $ifNull: ["$totalMinutes", 0],
+            },
+          },
 
-  await Farmer.updateOne(
-    {
-      _id: farmerId,
-      owner: ownerId,
-    },
-    {
-      $set: {
-        totalWorkMinutes: data.totalWorkMinutes,
-        totalBilledAmount: data.totalBilledAmount,
-        totalPaidAmount: data.totalPaidAmount,
-        totalDueAmount: data.totalDueAmount,
-        lastWorkDate: data.lastWorkDate,
+          totalBilledAmount: {
+            $sum: {
+              $ifNull: ["$totalAmount", 0],
+            },
+          },
+
+          totalPaidAmount: {
+            $sum: {
+              $add: [
+                {
+                  $ifNull: ["$paidAmount", 0],
+                },
+                {
+                  $ifNull: [
+                    "$advanceAppliedAmount",
+                    0,
+                  ],
+                },
+              ],
+            },
+          },
+
+          totalDueAmount: {
+            $sum: {
+              $ifNull: ["$dueAmount", 0],
+            },
+          },
+        },
       },
-    },
-    { session }
-  );
+    ]);
 
-  return data;
+    if (session) {
+      aggregation.session(session);
+    }
+
+    const works = await aggregation;
+
+    // =========================================
+    // 2. SUMMARY DATA
+    // =========================================
+
+    const summary = works[0] || {
+      totalWorkMinutes: 0,
+      totalBilledAmount: 0,
+      totalPaidAmount: 0,
+      totalDueAmount: 0,
+    };
+
+    const totalMinutes =
+      summary.totalWorkMinutes || 0;
+
+    const totalHours = Math.floor(
+      totalMinutes / 60
+    );
+
+    const remainingMinutes =
+      totalMinutes % 60;
+
+    const formattedWorkTime =
+      totalHours > 0 && remainingMinutes > 0
+        ? `${totalHours} Hours ${remainingMinutes} Minutes`
+        : totalHours > 0
+          ? `${totalHours} Hours`
+          : `${remainingMinutes} Minutes`;
+
+    // =========================================
+    // 3. UPDATE FARMER
+    // =========================================
+
+    const updateQuery = Farmer.findOneAndUpdate(
+      {
+        _id: farmerObjectId,
+        owner: ownerObjectId,
+      },
+      {
+        $set: {
+          totalWorkMinutes: totalMinutes,
+          totalBilledAmount:
+            summary.totalBilledAmount,
+          totalPaidAmount:
+            summary.totalPaidAmount,
+          totalDueAmount:
+            summary.totalDueAmount,
+        },
+      },
+      {
+        new: true,
+      }
+    );
+
+    if (session) {
+      updateQuery.session(session);
+    }
+
+    const farmer = await updateQuery;
+
+    if (!farmer) {
+      throw new Error(
+        "Farmer not found while syncing summary"
+      );
+    }
+
+    // =========================================
+    // 4. RETURN UPDATED SUMMARY
+    // =========================================
+
+    return {
+      totalBilledAmount:
+        farmer.totalBilledAmount,
+
+      totalDueAmount:
+        farmer.totalDueAmount,
+
+      totalPaidAmount:
+        farmer.totalPaidAmount,
+
+      totalWorkMinutes:
+        farmer.totalWorkMinutes,
+
+      // Additional fields
+      totalMinutes:
+        farmer.totalWorkMinutes,
+
+      totalHours,
+
+      formattedWorkTime,
+
+      village: farmer.village,
+    };
+  } catch (error) {
+    console.error(
+      "syncFarmerSummary error:",
+      error
+    );
+
+    throw error;
+  }
 };

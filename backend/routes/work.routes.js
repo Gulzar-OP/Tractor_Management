@@ -13,6 +13,7 @@ import {
 } from "../controllers/work.controller.js";
 
 import { protect } from "../middleware/auth.middleware.js";
+import { dueSummary } from "../controllers/dueSummary.controller.js";
 
 const router = express.Router();
 
@@ -32,5 +33,7 @@ router.delete(
 );
 router.put("/:id", protect, updateWork);
 router.post("/:id/cancel", protect, cancelWork);
+
+router.get("/due-summary", protect, dueSummary);
 
 export default router;

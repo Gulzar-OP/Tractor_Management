@@ -1,4 +1,3 @@
-
 import React, {
   useCallback,
   useEffect,
@@ -27,8 +26,8 @@ import {
   BadgeIndianRupee,
   AlertCircle,
   Layers,
-  IndianRupee,
   Banknote,
+  Timer,
 } from "lucide-react";
 
 import Badge from "../../components/UI/Badge";
@@ -86,6 +85,23 @@ const getLocalDateBoundary = (date, end = false) => {
   ).getTime();
 };
 
+const formatWorkTime = (totalMinutes = 0) => {
+  const minutes = Math.max(0, Number(totalMinutes || 0));
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours > 0 && remainingMinutes > 0) {
+    return `${hours}h ${remainingMinutes}m`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+
+  return `${remainingMinutes}m`;
+};
+
 const getWorkAmounts = (work) => {
   const total = Math.max(0, Number(work?.totalAmount || 0));
   const paid = Math.max(0, Number(work?.paidAmount || 0));
@@ -128,6 +144,7 @@ function StatTile({
     rose: "bg-rose-100 text-rose-600",
     amber: "bg-amber-100 text-amber-700",
     blue: "bg-blue-100 text-blue-700",
+    orange: "bg-orange-100 text-orange-700",
   };
 
   const valueTones = {
@@ -137,6 +154,7 @@ function StatTile({
     rose: "text-rose-600",
     amber: "text-amber-600",
     blue: "text-blue-700",
+    orange: "text-orange-700",
   };
 
   return (
@@ -268,7 +286,9 @@ export default function FarmerDetails() {
           }
         );
 
-        setFarmer(res.data?.farmer || res.data || null);
+        setFarmer(
+          res.data?.farmer || res.data || null
+        );
       } catch (error) {
         if (
           error.code === "ERR_CANCELED" ||
@@ -340,10 +360,27 @@ export default function FarmerDetails() {
     Number(farmer?.advanceAmount || 0)
   );
 
+  // Total accumulated work minutes
+  const totalWorkMinutes = Math.max(
+    0,
+    Number(farmer?.totalWorkMinutes || 0)
+  );
+
+  const totalWorkHours = Math.floor(
+    totalWorkMinutes / 60
+  );
+
+  const remainingWorkMinutes =
+    totalWorkMinutes % 60;
+
+  const formattedTotalWorkTime =
+    formatWorkTime(totalWorkMinutes);
+
   // Advance already used against work records.
   const totalAdvanceApplied = works.reduce(
     (sum, work) =>
-      sum + Math.max(
+      sum +
+      Math.max(
         0,
         Number(work?.advanceAppliedAmount || 0)
       ),
@@ -369,7 +406,9 @@ export default function FarmerDetails() {
     billedAmount > 0
       ? Math.min(
           100,
-          Math.round((settledAmount / billedAmount) * 100)
+          Math.round(
+            (settledAmount / billedAmount) * 100
+          )
         )
       : 0;
 
@@ -421,13 +460,21 @@ export default function FarmerDetails() {
 
     return [...works]
       .filter((work) => {
-        if (start === null && end === null) return true;
+        if (start === null && end === null) {
+          return true;
+        }
 
         const workDate = getDateTimestamp(work?.date);
 
         if (workDate === null) return false;
-        if (start !== null && workDate < start) return false;
-        if (end !== null && workDate > end) return false;
+
+        if (start !== null && workDate < start) {
+          return false;
+        }
+
+        if (end !== null && workDate > end) {
+          return false;
+        }
 
         return true;
       })
@@ -438,6 +485,15 @@ export default function FarmerDetails() {
         return dateB - dateA;
       });
   }, [works, filters.startDate, filters.endDate]);
+
+  // Total minutes for currently filtered work records
+  const filteredTotalMinutes = useMemo(() => {
+    return filteredWorks.reduce(
+      (sum, work) =>
+        sum + Math.max(0, Number(work?.totalMinutes || 0)),
+      0
+    );
+  }, [filteredWorks]);
 
   /* ---------- Payment Navigation ---------- */
 
@@ -478,7 +534,9 @@ export default function FarmerDetails() {
   };
 
   const lastWorkDate =
-    farmer?.lastWorkDate || filteredWorks[0]?.date || works[0]?.date;
+    farmer?.lastWorkDate ||
+    filteredWorks[0]?.date ||
+    works[0]?.date;
 
   /* ---------- Loading ---------- */
 
@@ -488,8 +546,8 @@ export default function FarmerDetails() {
         <div className="h-64 animate-pulse bg-emerald-900/80" />
 
         <div className="mx-auto -mt-12 max-w-7xl space-y-6 px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-            {[...Array(6)].map((_, i) => (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {[...Array(8)].map((_, i) => (
               <div
                 key={i}
                 className="h-28 animate-pulse rounded-2xl bg-white shadow"
@@ -499,6 +557,7 @@ export default function FarmerDetails() {
 
           <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
             <div className="h-96 animate-pulse rounded-3xl bg-white shadow" />
+
             <div className="h-96 animate-pulse rounded-3xl bg-white shadow" />
           </div>
         </div>
@@ -604,7 +663,7 @@ export default function FarmerDetails() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         {/* STAT STRIP */}
 
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 lg:gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 lg:gap-4">
           <StatTile
             icon={Layers}
             label="Works"
@@ -648,6 +707,16 @@ export default function FarmerDetails() {
             value={formatCurrency(advanceAmount)}
             tone="amber"
             hint="Remaining credit"
+          />
+
+          {/* NEW: TOTAL WORK TIME */}
+
+          <StatTile
+            icon={Clock}
+            label="Total Work Time"
+            value={formattedTotalWorkTime}
+            tone="orange"
+            hint={`${totalWorkMinutes.toLocaleString("en-IN")} total minutes`}
           />
         </div>
 
@@ -726,6 +795,38 @@ export default function FarmerDetails() {
                   </button>
                 )}
               </div>
+
+              {/* FILTERED WORK TIME */}
+
+              {hasFilters && (
+                <div className="mt-4 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-xl bg-white p-2.5 text-emerald-600">
+                      <Timer size={18} />
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium text-emerald-700">
+                        Work Time in Selected Period
+                      </p>
+
+                      <p className="text-lg font-bold text-emerald-900">
+                        {formatWorkTime(filteredTotalMinutes)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-xs text-emerald-600">
+                      Total Minutes
+                    </p>
+
+                    <p className="font-bold text-emerald-800">
+                      {filteredTotalMinutes.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* WORK ROWS */}
@@ -745,7 +846,9 @@ export default function FarmerDetails() {
                     workTotal > 0
                       ? Math.min(
                           100,
-                          Math.round((settled / workTotal) * 100)
+                          Math.round(
+                            (settled / workTotal) * 100
+                          )
                         )
                       : 0;
 
@@ -782,7 +885,11 @@ export default function FarmerDetails() {
                             <Badge
                               status={
                                 work.paymentStatus ||
-                                (isPaid ? "Paid" : settled > 0 ? "Partial" : "Due")
+                                (isPaid
+                                  ? "Paid"
+                                  : settled > 0
+                                    ? "Partial"
+                                    : "Due")
                               }
                             />
                           </div>
@@ -819,7 +926,10 @@ export default function FarmerDetails() {
                       <div className="w-full lg:w-64 lg:shrink-0">
                         <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
                           <div>
-                            <p className="text-slate-400">Total</p>
+                            <p className="text-slate-400">
+                              Total
+                            </p>
+
                             <p className="font-bold text-slate-900">
                               {formatCurrency(workTotal)}
                             </p>
@@ -829,6 +939,7 @@ export default function FarmerDetails() {
                             <p className="text-slate-400">
                               Direct paid
                             </p>
+
                             <p className="font-semibold text-blue-700">
                               {formatCurrency(directPaid)}
                             </p>
@@ -838,6 +949,7 @@ export default function FarmerDetails() {
                             <p className="text-slate-400">
                               Advance adjusted
                             </p>
+
                             <p className="font-semibold text-emerald-700">
                               {formatCurrency(workAdvance)}
                             </p>
@@ -847,6 +959,7 @@ export default function FarmerDetails() {
                             <p className="text-slate-400">
                               Remaining due
                             </p>
+
                             <p
                               className={`font-semibold ${
                                 workDue > 0
@@ -936,6 +1049,63 @@ export default function FarmerDetails() {
           {/* SIDEBAR */}
 
           <aside className="space-y-6 lg:sticky lg:top-6">
+            {/* TOTAL WORK TIME OVERVIEW */}
+
+            <div className="rounded-3xl bg-gradient-to-br from-orange-500 to-amber-400 p-6 text-white shadow-lg shadow-orange-500/20">
+              <div className="flex items-center gap-2 text-sm font-semibold text-orange-50">
+                <Clock size={17} />
+                Total Work Time
+              </div>
+
+              <p className="mt-3 text-4xl font-extrabold tabular-nums">
+                {formattedTotalWorkTime}
+              </p>
+
+              <p className="mt-1 text-sm text-orange-50">
+                {totalWorkMinutes.toLocaleString("en-IN")} total minutes
+              </p>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-white/15 p-4 backdrop-blur">
+                  <p className="text-xs text-orange-50">
+                    Total Hours
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold">
+                    {totalWorkHours}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-white/15 p-4 backdrop-blur">
+                  <p className="text-xs text-orange-50">
+                    Remaining Minutes
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold">
+                    {remainingWorkMinutes}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-white/20 pt-3">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-orange-50">
+                    Average per work
+                  </span>
+
+                  <span className="font-bold">
+                    {totalWorks > 0
+                      ? formatWorkTime(
+                          Math.round(
+                            totalWorkMinutes / totalWorks
+                          )
+                        )
+                      : "0m"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             {/* PAYMENT OVERVIEW */}
 
             <div className="rounded-3xl bg-white p-6 shadow-lg shadow-slate-900/5 ring-1 ring-slate-900/5">
@@ -992,7 +1162,9 @@ export default function FarmerDetails() {
                 </div>
 
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-slate-500">Total billed</dt>
+                  <dt className="text-slate-500">
+                    Total billed
+                  </dt>
 
                   <dd className="font-bold tabular-nums text-slate-900">
                     {formatCurrency(billedAmount)}
@@ -1032,6 +1204,7 @@ export default function FarmerDetails() {
               <div className="mt-4 border-t border-white/20 pt-3">
                 <div className="flex items-center justify-between gap-3 text-xs text-amber-50">
                   <span>Already adjusted in works</span>
+
                   <span className="font-bold">
                     {formatCurrency(totalAdvanceApplied)}
                   </span>
