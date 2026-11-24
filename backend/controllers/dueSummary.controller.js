@@ -1,17 +1,34 @@
-import Work from "../models/work.model.js";
-import Farmer from "../models/farmer.model.js";
-import { scopeFilter} from "./work.controller.js" ;
+
+import mongoose from "mongoose";
+import { scopeFilter } from "./work.controller.js";
+import WorkLog from "../models/work.model.js";
 
 export const dueSummary = async (req, res) => {
   try {
+    // 1. Get user scope
     const filter = scopeFilter(req);
 
-    const farmers = await Work.aggregate([
+    // 2. Convert string IDs into ObjectIds
+    const aggregateFilter = { ...filter };
+
+    if (aggregateFilter.owner) {
+      aggregateFilter.owner = new mongoose.Types.ObjectId(
+        aggregateFilter.owner
+      );
+    }
+
+    if (aggregateFilter.createdBy) {
+      aggregateFilter.createdBy = new mongoose.Types.ObjectId(
+        aggregateFilter.createdBy
+      );
+    }
+
+    // 3. Aggregate farmer-wise work summary
+    const farmers = await WorkLog.aggregate([
       {
-        $match: filter,
+        $match: aggregateFilter,
       },
 
-      // Group work records farmer-wise
       {
         $group: {
           _id: "$farmer",
@@ -34,7 +51,7 @@ export const dueSummary = async (req, res) => {
         },
       },
 
-      // Get farmer details
+      // 4. Lookup farmer details
       {
         $lookup: {
           from: "farmers",
@@ -44,6 +61,7 @@ export const dueSummary = async (req, res) => {
         },
       },
 
+      // 5. Preserve records even if farmer is missing
       {
         $unwind: {
           path: "$farmer",
@@ -51,7 +69,7 @@ export const dueSummary = async (req, res) => {
         },
       },
 
-      // Select required fields
+      // 6. Select response fields
       {
         $project: {
           _id: 0,
@@ -59,12 +77,16 @@ export const dueSummary = async (req, res) => {
           farmerId: "$_id",
 
           name: {
-            $ifNull: ["$farmer.name", "Unknown"],
+            $ifNull: ["$farmer.name", "Unknown Farmer"],
           },
 
-          phone: "$farmer.phone",
+          phone: {
+            $ifNull: ["$farmer.phone", ""],
+          },
 
-          village: "$farmer.village",
+          village: {
+            $ifNull: ["$farmer.village", ""],
+          },
 
           totalBilledAmount: 1,
           totalPaidAmount: 1,
@@ -73,7 +95,7 @@ export const dueSummary = async (req, res) => {
         },
       },
 
-      // Highest due first
+      // 7. Highest due first
       {
         $sort: {
           totalDueAmount: -1,
@@ -81,18 +103,28 @@ export const dueSummary = async (req, res) => {
       },
     ]);
 
+    // 8. Calculate overall summary
     const totalBilled = farmers.reduce(
-      (sum, farmer) => sum + farmer.totalBilledAmount,
+      (sum, farmer) =>
+        sum + Number(farmer.totalBilledAmount || 0),
       0
     );
 
     const totalCollected = farmers.reduce(
-      (sum, farmer) => sum + farmer.totalPaidAmount,
+      (sum, farmer) =>
+        sum + Number(farmer.totalPaidAmount || 0),
       0
     );
 
     const totalOutstanding = farmers.reduce(
-      (sum, farmer) => sum + farmer.totalDueAmount,
+      (sum, farmer) =>
+        sum + Number(farmer.totalDueAmount || 0),
+      0
+    );
+
+    const totalWorks = farmers.reduce(
+      (sum, farmer) =>
+        sum + Number(farmer.totalWorks || 0),
       0
     );
 
@@ -104,6 +136,7 @@ export const dueSummary = async (req, res) => {
       (farmer) => farmer.totalDueAmount <= 0
     );
 
+    // 9. Send response
     return res.status(200).json({
       success: true,
 
@@ -114,7 +147,9 @@ export const dueSummary = async (req, res) => {
 
         farmersWithDue: farmersWithDue.length,
         fullyClearedFarmers: fullyClearedFarmers.length,
+
         totalFarmers: farmers.length,
+        totalWorks,
       },
 
       farmers,

@@ -25,12 +25,12 @@ export const protect = (req, res, next) => {
         ? decoded.id || decoded._id
         : null);
 
-    console.log("PROTECT MIDDLEWARE:", {
-      path: req.originalUrl,
-      method: req.method,
-      user: req.user,
-      ownerId: req.ownerId,
-    });
+    // console.log("PROTECT MIDDLEWARE:", {
+    //   path: req.originalUrl,
+    //   method: req.method,
+    //   user: req.user,
+    //   ownerId: req.ownerId,
+    // });
 
     if (!req.ownerId) {
       return res.status(401).json({

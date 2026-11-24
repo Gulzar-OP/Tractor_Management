@@ -82,7 +82,6 @@ export default function DueSummary() {
         `${API}/work/due-summary`,
         { withCredentials: true }
       );
-      console.log(response)
 
       const list =
         response.data?.farmers || response.data?.all || response.data?.data || [];
