@@ -17,6 +17,20 @@ const farmerSchema = new mongoose.Schema({
   phone: String,
   village: String,
   address: String,
+  nameSearch: {
+    type: String,
+    default: "",
+  },
+
+  villageSearch: {
+    type: String,
+    default: "",
+  },
+
+  districtSearch: {
+    type: String,
+    default: "",
+  },
   totalWorkMinutes: { type: Number, default: 0 },
   totalBilledAmount: { type: Number, default: 0 },
   totalPaidAmount: { type: Number, default: 0 },

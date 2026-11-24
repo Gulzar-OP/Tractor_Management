@@ -6,7 +6,6 @@ import jwt from 'jsonwebtoken'
 const isProduction = process.env.NODE_ENV === "production";
 
 export const register = async (req, res) => {
-  console.log("NEW REGISTER HIT", req.body);
   try {
     const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
     const email =

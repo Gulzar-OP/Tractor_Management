@@ -1,4 +1,3 @@
-
 import WorkLog from "../models/work.model.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerAdvanceLedger from "../models/farmerAdvanceLedger.model.js";
@@ -479,6 +478,8 @@ export const syncFarmerSummary = async (
         $match: {
           farmer: farmerObjectId,
           owner: ownerObjectId,
+          // Cancelled works totals mein nahi ginne chahiye
+          status: { $ne: "CANCELLED" },
         },
       },
       {
@@ -497,19 +498,12 @@ export const syncFarmerSummary = async (
             },
           },
 
+          // applyFarmerAdvance advance ko pehle hi paidAmount mein
+          // add kar deta hai, isliye advanceAppliedAmount dobara
+          // jodna double count hota tha.
           totalPaidAmount: {
             $sum: {
-              $add: [
-                {
-                  $ifNull: ["$paidAmount", 0],
-                },
-                {
-                  $ifNull: [
-                    "$advanceAppliedAmount",
-                    0,
-                  ],
-                },
-              ],
+              $ifNull: ["$paidAmount", 0],
             },
           },
 

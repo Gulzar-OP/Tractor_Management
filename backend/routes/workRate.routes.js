@@ -6,6 +6,7 @@ import {
   updateProfile,
   addRates,
   getRateByType,
+  deleteRate,
 } from "../controllers/workRate.controller.js";
 
 // Replace this with whatever middleware already guards your
@@ -21,7 +22,7 @@ router.post("/",protect,addRates)
 router.post("/get-rate", protect, getRateByType);
 router.get("/profile", protect, getProfile);
 router.patch("/profile", protect, updateProfile);
-
+router.delete("/:id", protect, deleteRate)
 
 export default router;
 

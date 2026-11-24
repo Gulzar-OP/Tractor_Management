@@ -17,14 +17,14 @@ router.post("/add", protect, isOwner, addDriver);
 
 router.get("/me",protect,me)
 
-router.get("/all", protect, getAllDrivers);
+router.get("/all", protect,isOwner, getAllDrivers);
 
 router.get("/:id", protect, getDriverById);
 
-router.put("/:id", protect, updateDriver);
+router.put("/:id", protect,isOwner, updateDriver);
 
 router.delete("/:id", protect, isOwner, deleteDriver);
 
-router.get("/driver/:_id", protect, getDriver);
+router.get("/:_id", protect,isOwner, getDriver);
 
 export default router;

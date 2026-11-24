@@ -76,9 +76,12 @@ export const dateWiseReport = async (req, res) => {
     const workFilter = {
       owner: req.user.ownerId,
       date: { $gte: start, $lt: end },
+      status: { $ne: "CANCELLED" },
     };
-    if (!isOwner) workFilter.createdBy = req.user.userId;
 
+    if (!isOwner) {
+      workFilter.createdBy = req.user.userId;
+    }
     const [works, expenses] = await Promise.all([
       WorkLog.find(workFilter)
         .populate("farmer", "name phone village")

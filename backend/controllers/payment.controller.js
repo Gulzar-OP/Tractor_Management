@@ -440,11 +440,11 @@ export const deletePayment = async (req, res) => {
     const { id } = req.params;
 
     if (!owner) {
-      throw httpError(401, "Unauthorized");
+      throw httpError("Unauthorized",401);
     }
 
     if (!isValidId(id)) {
-      throw httpError(400, "Invalid payment ID");
+      throw httpError("Invalid payment ID",400);
     }
 
     let responseData = null;
@@ -457,7 +457,7 @@ export const deletePayment = async (req, res) => {
       }).session(session);
 
       if (!payment) {
-        throw httpError(404, "Successful payment not found");
+        throw httpError( "Successful payment not found",404);
       }
 
       const paymentType = payment.paymentType || "WORK_PAYMENT";
@@ -473,7 +473,7 @@ export const deletePayment = async (req, res) => {
         }).session(session);
 
         if (!farmer) {
-          throw httpError(404, "Farmer not found");
+          throw httpError( "Farmer not found",404);
         }
 
         const lot = await getReversibleAdvanceLot({
@@ -532,8 +532,8 @@ export const deletePayment = async (req, res) => {
 
       if (!payment.workId) {
         throw httpError(
-          400,
-          "Work payment does not have a linked work"
+          
+          "Work payment does not have a linked work",400
         );
       }
 
@@ -543,7 +543,7 @@ export const deletePayment = async (req, res) => {
       }).session(session);
 
       if (!work) {
-        throw httpError(404, "Linked work not found");
+        throw httpError("Linked work not found",404);
       }
 
       const farmer = await Farmer.findOne({
@@ -552,7 +552,7 @@ export const deletePayment = async (req, res) => {
       }).session(session);
 
       if (!farmer) {
-        throw httpError(404, "Farmer not found");
+        throw httpError( "Farmer not found",404);
       }
 
       const appliedAmount = round2(
@@ -575,8 +575,8 @@ export const deletePayment = async (req, res) => {
         ) > 0.01
       ) {
         throw httpError(
-          409,
-          "Payment accounting breakdown is inconsistent"
+          
+          "Payment accounting breakdown is inconsistent",409
         );
       }
 
@@ -610,8 +610,8 @@ export const deletePayment = async (req, res) => {
 
       if (currentPaid + 0.01 < appliedAmount) {
         throw httpError(
-          409,
-          "Work paid amount is lower than this payment allocation"
+          
+          "Work paid amount is lower than this payment allocation",409
         );
       }
 
@@ -702,17 +702,17 @@ export const updatePayment = async (req, res) => {
     const { amount, paymentMethod, note } = req.body;
 
     if (!owner) {
-      throw httpError(401, "Unauthorized");
+      throw httpError("Unauthorized",401);
     }
 
     if (!isValidId(id)) {
-      throw httpError(400, "Invalid payment ID");
+      throw httpError("Invalid payment ID",400);
     }
 
     const newAmount = round2(Number(amount));
 
     if (!Number.isFinite(newAmount) || newAmount <= 0) {
-      throw httpError(400, "Amount must be greater than zero");
+      throw httpError( "Amount must be greater than zero",400);
     }
 
     const allowedMethods = [
@@ -723,7 +723,7 @@ export const updatePayment = async (req, res) => {
     ];
 
     if (!allowedMethods.includes(paymentMethod)) {
-      throw httpError(400, "Invalid payment method");
+      throw httpError("Invalid payment method",400);
     }
 
     let responseData = null;
@@ -736,7 +736,7 @@ export const updatePayment = async (req, res) => {
       }).session(session);
 
       if (!payment) {
-        throw httpError(404, "Successful payment not found");
+        throw httpError( "Successful payment not found",404);
       }
 
       const paymentType = payment.paymentType || "WORK_PAYMENT";
@@ -752,7 +752,7 @@ export const updatePayment = async (req, res) => {
         }).session(session);
 
         if (!farmer) {
-          throw httpError(404, "Farmer not found");
+          throw httpError("Farmer not found",404);
         }
 
         const oldAmount = round2(
@@ -768,8 +768,8 @@ export const updatePayment = async (req, res) => {
           Number(payment.appliedAmount || 0) > 0
         ) {
           throw httpError(
-            409,
-            "Invalid advance payment accounting breakdown"
+            
+            "Invalid advance payment accounting breakdown",409
           );
         }
 
@@ -853,8 +853,8 @@ export const updatePayment = async (req, res) => {
 
       if (!payment.workId) {
         throw httpError(
-          400,
-          "Work payment does not have a linked work"
+          
+          "Work payment does not have a linked work",400
         );
       }
 
@@ -864,7 +864,7 @@ export const updatePayment = async (req, res) => {
       }).session(session);
 
       if (!work) {
-        throw httpError(404, "Linked work not found");
+        throw httpError("Linked work not found",404);
       }
 
       const farmer = await Farmer.findOne({
@@ -873,7 +873,7 @@ export const updatePayment = async (req, res) => {
       }).session(session);
 
       if (!farmer) {
-        throw httpError(404, "Farmer not found");
+        throw httpError("Farmer not found",404);
       }
 
       const oldAppliedAmount = round2(
@@ -896,8 +896,8 @@ export const updatePayment = async (req, res) => {
         ) > 0.01
       ) {
         throw httpError(
-          409,
-          "Existing payment accounting breakdown is inconsistent"
+          
+          "Existing payment accounting breakdown is inconsistent",409
         );
       }
 
@@ -931,8 +931,8 @@ export const updatePayment = async (req, res) => {
 
       if (currentPaid + 0.01 < oldAppliedAmount) {
         throw httpError(
-          409,
-          "Work paid amount is lower than the existing payment allocation"
+          
+          "Work paid amount is lower than the existing payment allocation",409
         );
       }
 
@@ -1067,6 +1067,182 @@ export const updatePayment = async (req, res) => {
 // GET PAYMENT RECORDS
 // =====================================================
 
+// export const getPaymentRecords = async (req, res) => {
+//   try {
+//     const owner = getOwner(req);
+
+//     if (!owner) {
+//       throw httpError("Unauthorized", 401);
+//     }
+
+//     const {
+//       page = 1,
+//       limit = 10,
+//       status,
+//       paymentMethod,
+//       farmerID,
+//       driverID,
+//       workId,
+//       fromDate,
+//       toDate,
+//     } = req.query;
+
+//     const currentPage = Math.max(
+//       1,
+//       Number.parseInt(page, 10) || 1
+//     );
+
+//     const pageLimit = Math.min(
+//       100,
+//       Math.max(1, Number.parseInt(limit, 10) || 10)
+//     );
+
+//     const filter = { owner };
+
+//     if (status) {
+//       filter.status = String(status).toUpperCase();
+//     }
+
+//     if (paymentMethod) {
+//       filter.paymentMethod = String(
+//         paymentMethod
+//       ).toUpperCase();
+//     }
+
+//     if (farmerID && isValidId(farmerID)) {
+//       filter.farmerID = farmerID;
+//     }
+
+//     if (driverID && isValidId(driverID)) {
+//       filter.driverID = driverID;
+//     }
+
+//     if (workId && isValidId(workId)) {
+//       filter.workId = workId;
+//     }
+
+//     if (fromDate || toDate) {
+//       filter.paymentDate = {};
+
+//       if (fromDate) {
+//         const start = new Date(fromDate);
+
+//         if (Number.isNaN(start.getTime())) {
+//           throw httpError("Invalid fromDate.", 400);
+//         }
+
+//         start.setHours(0, 0, 0, 0);
+//         filter.paymentDate.$gte = start;
+//       }
+
+//       if (toDate) {
+//         const end = new Date(toDate);
+
+//         if (Number.isNaN(end.getTime())) {
+//           throw httpError("Invalid toDate.", 400);
+//         }
+
+//         end.setHours(23, 59, 59, 999);
+//         filter.paymentDate.$lte = end;
+//       }
+//     }
+
+//     const skip = (currentPage - 1) * pageLimit;
+
+//     const [
+//       payments,
+//       totalRecords,
+//       [summary = {}],
+//     ] = await Promise.all([
+//       Payment.find(filter)
+//         .populate("farmerID", "name phone village")
+//         .populate("driverID", "name phone")
+//         .populate("workId", "date totalAmount paidAmount dueAmount")
+//         .sort({ paymentDate: -1, createdAt: -1 })
+//         .skip(skip)
+//         .limit(pageLimit)
+//         .lean(),
+
+//       Payment.countDocuments(filter),
+
+//       Payment.aggregate([
+//         { $match: filter },
+//         {
+//           $group: {
+//             _id: null,
+
+//             totalAmount: {
+//               $sum: "$amount",
+//             },
+
+//             totalAppliedAmount: {
+//               $sum: "$appliedAmount",
+//             },
+
+//             totalAdvanceAmount: {
+//               $sum: "$advanceAmount",
+//             },
+
+//             successfulAmount: {
+//               $sum: {
+//                 $cond: [
+//                   { $eq: ["$status", "SUCCESS"] },
+//                   "$amount",
+//                   0,
+//                 ],
+//               },
+//             },
+
+//             successfulCount: {
+//               $sum: {
+//                 $cond: [
+//                   { $eq: ["$status", "SUCCESS"] },
+//                   1,
+//                   0,
+//                 ],
+//               },
+//             },
+//           },
+//         },
+//       ]),
+//     ]);
+
+//     return res.status(200).json({
+//       success: true,
+//       payments,
+//       summary: {
+//         totalAmount: round2(summary.totalAmount || 0),
+//         totalAppliedAmount: round2(
+//           summary.totalAppliedAmount || 0
+//         ),
+//         totalAdvanceAmount: round2(
+//           summary.totalAdvanceAmount || 0
+//         ),
+//         successfulAmount: round2(
+//           summary.successfulAmount || 0
+//         ),
+//         successfulCount: summary.successfulCount || 0,
+//       },
+//       pagination: {
+//         currentPage,
+//         limit: pageLimit,
+//         totalRecords,
+//         totalPages: Math.ceil(
+//           totalRecords / pageLimit
+//         ),
+//       },
+//     });
+//   } catch (error) {
+//     return handleError(
+//       res,
+//       error,
+//       "Failed to fetch payment records."
+//     );
+//   }
+// };
+
+// import mongoose from "mongoose";
+
 export const getPaymentRecords = async (req, res) => {
   try {
     const owner = getOwner(req);
@@ -1087,6 +1263,7 @@ export const getPaymentRecords = async (req, res) => {
       toDate,
     } = req.query;
 
+    // Pagination
     const currentPage = Math.max(
       1,
       Number.parseInt(page, 10) || 1
@@ -1097,6 +1274,7 @@ export const getPaymentRecords = async (req, res) => {
       Math.max(1, Number.parseInt(limit, 10) || 10)
     );
 
+    // 1. Normal MongoDB filter
     const filter = { owner };
 
     if (status) {
@@ -1121,6 +1299,7 @@ export const getPaymentRecords = async (req, res) => {
       filter.workId = workId;
     }
 
+    // Date filter
     if (fromDate || toDate) {
       filter.paymentDate = {};
 
@@ -1147,47 +1326,83 @@ export const getPaymentRecords = async (req, res) => {
       }
     }
 
+    // 2. Aggregation filter
+    // Aggregate does not automatically cast string IDs.
+    const aggregateFilter = { ...filter };
+
+    const objectIdFields = [
+      "owner",
+      "farmerID",
+      "driverID",
+      "workId",
+    ];
+
+    for (const field of objectIdFields) {
+      if (aggregateFilter[field]) {
+        if (!mongoose.isValidObjectId(aggregateFilter[field])) {
+          throw httpError(`Invalid ${field}.`, 400);
+        }
+
+        aggregateFilter[field] = new mongoose.Types.ObjectId(
+          aggregateFilter[field]
+        );
+      }
+    }
+
     const skip = (currentPage - 1) * pageLimit;
 
+    // 3. Fetch records, count and summary
     const [
       payments,
       totalRecords,
       [summary = {}],
     ] = await Promise.all([
+      // Payment records
       Payment.find(filter)
         .populate("farmerID", "name phone village")
         .populate("driverID", "name phone")
-        .populate("workId", "date totalAmount paidAmount dueAmount")
-        .sort({ paymentDate: -1, createdAt: -1 })
+        .populate(
+          "workId",
+          "date totalAmount paidAmount dueAmount"
+        )
+        .sort({
+          paymentDate: -1,
+          createdAt: -1,
+        })
         .skip(skip)
         .limit(pageLimit)
         .lean(),
 
+      // Total records
       Payment.countDocuments(filter),
 
+      // Payment summary
       Payment.aggregate([
-        { $match: filter },
+        {
+          $match: aggregateFilter,
+        },
+
         {
           $group: {
             _id: null,
 
             totalAmount: {
-              $sum: "$amount",
+              $sum: { $ifNull: ["$amount", 0] },
             },
 
             totalAppliedAmount: {
-              $sum: "$appliedAmount",
+              $sum: { $ifNull: ["$appliedAmount", 0] },
             },
 
             totalAdvanceAmount: {
-              $sum: "$advanceAmount",
+              $sum: { $ifNull: ["$advanceAmount", 0] },
             },
 
             successfulAmount: {
               $sum: {
                 $cond: [
                   { $eq: ["$status", "SUCCESS"] },
-                  "$amount",
+                  { $ifNull: ["$amount", 0] },
                   0,
                 ],
               },
@@ -1207,32 +1422,46 @@ export const getPaymentRecords = async (req, res) => {
       ]),
     ]);
 
+    // 4. Response
     return res.status(200).json({
       success: true,
+
       payments,
+
       summary: {
-        totalAmount: round2(summary.totalAmount || 0),
+        totalAmount: round2(
+          summary.totalAmount || 0
+        ),
+
         totalAppliedAmount: round2(
           summary.totalAppliedAmount || 0
         ),
+
         totalAdvanceAmount: round2(
           summary.totalAdvanceAmount || 0
         ),
+
         successfulAmount: round2(
           summary.successfulAmount || 0
         ),
-        successfulCount: summary.successfulCount || 0,
+
+        successfulCount:
+          summary.successfulCount || 0,
       },
+
       pagination: {
         currentPage,
         limit: pageLimit,
         totalRecords,
+
         totalPages: Math.ceil(
           totalRecords / pageLimit
         ),
       },
     });
   } catch (error) {
+    console.error("getPaymentRecords error:", error);
+
     return handleError(
       res,
       error,

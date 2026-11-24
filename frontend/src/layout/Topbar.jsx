@@ -160,17 +160,54 @@ const normalizeSearchText = (value = "") =>
     .trim();
 
 // At most 4 distinct queries per search (it used to be up to 8 requests per keystroke)
+// const getSearchVariants = (input = "") => {
+//   const original = normalizeSearchText(input);
+//   const latin = normalizeSearchText(transliterateHindi(input));
+
+//   const simplified = latin
+//     .replace(/aa/g, "a")
+//     .replace(/ee/g, "i")
+//     .replace(/oo/g, "u")
+//     .replace(/ph/g, "f");
+
+//   return [...new Set([original, latin, simplified, simplified.replace(/v/g, "w")])].filter(Boolean);
+// };
+const normalizePhonetic = (value = "") =>
+  normalizeSearchText(value)
+    .replace(/aa/g, "a")
+    .replace(/ee/g, "i")
+    .replace(/ii/g, "i")
+    .replace(/oo/g, "u")
+    .replace(/uu/g, "u")
+    .replace(/ph/g, "f")
+    .replace(/w/g, "v")
+    .replace(/([bcdfghjklmnpqrstvwxyz])\1+/g, "$1");
+
 const getSearchVariants = (input = "") => {
   const original = normalizeSearchText(input);
-  const latin = normalizeSearchText(transliterateHindi(input));
+
+  const latin = normalizeSearchText(
+    transliterateHindi(input)
+  );
 
   const simplified = latin
     .replace(/aa/g, "a")
     .replace(/ee/g, "i")
+    .replace(/ii/g, "i")
     .replace(/oo/g, "u")
+    .replace(/uu/g, "u")
     .replace(/ph/g, "f");
 
-  return [...new Set([original, latin, simplified, simplified.replace(/v/g, "w")])].filter(Boolean);
+  const variants = [
+    original,
+    latin,
+    simplified,
+    simplified.replace(/v/g, "w"),
+    normalizePhonetic(input),
+    normalizePhonetic(latin),
+  ];
+
+  return [...new Set(variants)].filter(Boolean);
 };
 
 const AVATAR_THEMES = [

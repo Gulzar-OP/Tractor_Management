@@ -5,62 +5,10 @@ import paymentModel from "../models/payment.model.js";
 import farmerAdvanceLotModel from "../models/farmerAdvanceLot.model.js";
 import farmerAdvanceAllocationModel from "../models/farmerAdvanceAllocation.model.js";
 import farmerAdvanceLedgerModel from "../models/farmerAdvanceLedger.model.js";
+import {
+  generateFarmerSearchFields,
+} from "../utils/searchTransliteration.js";
 
-export const createFarmer = async (req, res) => {
-  try {
-    const {
-      name,
-      phone,
-      village,
-      lastWorkDate,
-      fatherName,
-      notes,
-      totalWorkMinutes,
-      totalBilledAmount,
-      totalPaidAmount,
-      totalDueAmount,
-    } = req.body;
-      // console.log(req.user.userId);
-    if (!name) {
-      return res.status(400).json({
-        success: false,
-        message: "Farmer name is required",
-      });
-    }
-
-    const farmer = await Farmer.create({
-      createdBy: req.user.userId, 
-      owner: req.user.ownerId,
-      name,
-      phone,
-      village,
-      lastWorkDate,
-      fatherName: fatherName || "",
-      notes: notes || "",
-      totalWorkMinutes: totalWorkMinutes || 0,
-      totalBilledAmount: totalBilledAmount || 0,
-      totalPaidAmount: totalPaidAmount || 0,
-      totalDueAmount: totalDueAmount || 0,
-    });
-    // console.log("Farmer created:", farmer);
-
-    return res.status(201).json({
-      success: true,
-      message: "Farmer created successfully",
-      farmer,
-    });
-  } catch (err) {
-    console.error("Create Farmer Error:", err);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-    });
-  }
-};
-
-
-// Get Farmer Profile
 export const getFarmerById = async (req, res) => {
   try {
     const farmer = await Farmer.findById(req.params.id).populate('works');
@@ -230,33 +178,185 @@ console.log("DELETE FARMER OWNER:", ownerId);
 };
 
 
+export const createFarmer = async (req, res) => {
+  try {
+    const {
+      name,
+      phone,
+      village,
+      district,
+      lastWorkDate,
+      fatherName,
+      notes,
+      totalWorkMinutes,
+      totalBilledAmount,
+      totalPaidAmount,
+      totalDueAmount,
+    } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Farmer name is required",
+      });
+    }
+
+    const farmer = await Farmer.create({
+      createdBy: req.user.userId,
+      owner: req.user.ownerId,
+
+      name: name.trim(),
+      phone,
+      village,
+      district,
+      lastWorkDate,
+      fatherName: fatherName || "",
+      notes: notes || "",
+
+      totalWorkMinutes: totalWorkMinutes || 0,
+      totalBilledAmount: totalBilledAmount || 0,
+      totalPaidAmount: totalPaidAmount || 0,
+      totalDueAmount: totalDueAmount || 0,
+
+      // Hindi + English searchable fields
+      ...generateFarmerSearchFields({
+        name,
+        village,
+        district,
+      }),
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Farmer created successfully",
+      farmer,
+    });
+
+  } catch (err) {
+    console.error("Create Farmer Error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
 
 export const updateFarmer = async (req, res) => {
   try {
     const farmerId = req.params.id;
 
-    const updatedFarmer = await Farmer.findByIdAndUpdate(
-      farmerId,
-      req.body,               
-      { new: true, runValidators: true }
-    );
+    const userId = req.user.userId;
+    const ownerId = req.user.ownerId;
 
-    if (!updatedFarmer) {
+    // Owner can update all farmers under their account.
+    // Driver can update only farmers created by them.
+    const ownershipFilter = {
+      _id: farmerId,
+      owner: ownerId,
+    };
+
+    if (String(userId) !== String(ownerId)) {
+      ownershipFilter.createdBy = userId;
+    }
+
+    // Find existing farmer
+    const existingFarmer = await Farmer.findOne(ownershipFilter);
+
+    if (!existingFarmer) {
       return res.status(404).json({
-        error: "Farmer not found",
+        success: false,
+        message: "Farmer not found",
       });
     }
 
-    res.status(200).json({
-      message: "Update successfully",
+    const {
+      name,
+      phone,
+      village,
+      district,
+      lastWorkDate,
+      fatherName,
+      notes,
+      totalWorkMinutes,
+      totalBilledAmount,
+      totalPaidAmount,
+      totalDueAmount,
+    } = req.body;
+
+    // Validate name if provided
+    if (name !== undefined && !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Farmer name cannot be empty",
+      });
+    }
+
+    // Update only allowed fields
+    const updateData = {};
+
+    if (name !== undefined) updateData.name = name.trim();
+    if (phone !== undefined) updateData.phone = phone;
+    if (village !== undefined) updateData.village = village;
+    if (district !== undefined) updateData.district = district;
+    if (lastWorkDate !== undefined) updateData.lastWorkDate = lastWorkDate;
+    if (fatherName !== undefined) updateData.fatherName = fatherName;
+    if (notes !== undefined) updateData.notes = notes;
+
+    if (totalWorkMinutes !== undefined) {
+      updateData.totalWorkMinutes = totalWorkMinutes;
+    }
+
+    if (totalBilledAmount !== undefined) {
+      updateData.totalBilledAmount = totalBilledAmount;
+    }
+
+    if (totalPaidAmount !== undefined) {
+      updateData.totalPaidAmount = totalPaidAmount;
+    }
+
+    if (totalDueAmount !== undefined) {
+      updateData.totalDueAmount = totalDueAmount;
+    }
+
+    // Generate searchable fields using updated values
+    const updatedValues = {
+      name: updateData.name ?? existingFarmer.name,
+      village: updateData.village ?? existingFarmer.village,
+      district: updateData.district ?? existingFarmer.district,
+    };
+
+    Object.assign(
+      updateData,
+      generateFarmerSearchFields(updatedValues)
+    );
+
+    const updatedFarmer = await Farmer.findOneAndUpdate(
+      ownershipFilter,
+      { $set: updateData },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Farmer updated successfully",
       farmer: updatedFarmer,
     });
 
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Internal Server Error" });
+  } catch (err) {
+    console.error("Update Farmer Error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
   }
 };
+
 
 
 export const earningTotal = async (req, res) => {
@@ -370,85 +470,6 @@ export const allFarmerHistory = async (req, res) => {
   }
 };
 
-
-// GET /api/farmer/search?query=ram
-export const searchFarmers = async (req, res) => {
-  try {
-    const { query } = req.query;
-
-    const userId =
-      req.user?.id ||
-      req.user?._id ||
-      req.user?.userId;
-
-    const ownerId = req.ownerId;
-
-    if (!userId || !ownerId) {
-      console.log("Farmer search auth missing:", {
-        user: req.user,
-        ownerId: req.ownerId,
-      });
-
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized",
-      });
-    }
-
-    if (!query || !query.trim()) {
-      return res.status(200).json({
-        success: true,
-        farmers: [],
-      });
-    }
-
-    const term = query.trim();
-
-    const escapedTerm = term.replace(
-      /[.*+?^${}()|[\]\\]/g,
-      "\\$&"
-    );
-
-    const regex = new RegExp(escapedTerm, "i");
-
-    // Owner sees all farmers under their account.
-    // Driver sees only farmers created by them.
-    const isOwner = String(userId) === String(ownerId);
-
-    const ownershipFilter = {
-      owner: ownerId,
-    };
-
-    if (!isOwner) {
-      ownershipFilter.createdBy = userId;
-    }
-
-    const farmers = await Farmer.find({
-      ...ownershipFilter,
-      $or: [
-        { name: regex },
-        { phone: regex },
-        { village: regex },
-        { district: regex },
-      ],
-    })
-      .sort({ name: 1 })
-      .limit(20)
-      .lean();
-
-    return res.status(200).json({
-      success: true,
-      farmers,
-    });
-  } catch (err) {
-    console.error("searchFarmers error:", err);
-
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
-  }
-};
 
 export const getFarmerAdvanceReconciliation = async (req, res) => {
   try {
@@ -840,6 +861,25 @@ export const getFarmerAdvanceReconciliation = async (req, res) => {
 };
 
 export const getFarmerAdvanceHistory = async (req, res) => {
+  const isValidId = (id) =>
+    mongoose.Types.ObjectId.isValid(id);
+
+  const getOwner = (req) =>
+    req.user?.ownerId || req.user?.userId;
+
+  const httpError = (message, statusCode = 500) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    return error;
+  };
+  const handleError = (res, error, fallbackMessage) => {
+    console.error(fallbackMessage, error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || fallbackMessage,
+    });
+  };
   try {
     const owner = getOwner(req);
     const { farmerID } = req.params;
@@ -861,7 +901,7 @@ export const getFarmerAdvanceHistory = async (req, res) => {
       throw httpError("Farmer not found.", 404);
     }
 
-    const ledger = await FarmerAdvanceLedger.find({
+    const ledger = await farmerAdvanceLedgerModel.find({
       owner,
       farmerID,
     })
@@ -886,5 +926,83 @@ export const getFarmerAdvanceHistory = async (req, res) => {
       error,
       "Failed to fetch farmer advance history."
     );
+  }
+};
+export const searchFarmers = async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    const userId =
+      req.user?.id ||
+      req.user?._id ||
+      req.user?.userId;
+
+    const ownerId = req.ownerId;
+
+    if (!userId || !ownerId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!query || !query.trim()) {
+      return res.status(200).json({
+        success: true,
+        farmers: [],
+      });
+    }
+
+    const term = query.trim();
+
+    const escapedTerm = term.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+
+    const regex = new RegExp(escapedTerm, "i");
+
+    const isOwner =
+      String(userId) === String(ownerId);
+
+    const ownershipFilter = {
+      owner: ownerId,
+    };
+
+    if (!isOwner) {
+      ownershipFilter.createdBy = userId;
+    }
+
+    const farmers = await Farmer.find({
+      ...ownershipFilter,
+
+      $or: [
+        { name: regex },
+        { phone: regex },
+        { village: regex },
+        { district: regex },
+
+        // Transliteration search
+        { nameSearch: regex },
+        { villageSearch: regex },
+        { districtSearch: regex },
+      ],
+    })
+      .sort({ name: 1 })
+      .limit(20)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      farmers,
+    });
+
+  } catch (err) {
+    console.error("searchFarmers error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
