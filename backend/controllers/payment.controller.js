@@ -7,7 +7,7 @@ import Farmer from "../models/farmer.model.js";
 import User from "../models/user.model.js";
 
 import FarmerAdvanceLot from "../models/farmerAdvanceLot.model.js";
-
+import FarmerAdvanceAllocation from "../models/farmerAdvanceAllocation.model.js";
 import {
   syncFarmerSummary,
   recordAdvanceMovement,
@@ -1067,6 +1067,263 @@ export const updatePayment = async (req, res) => {
 // GET PAYMENT RECORDS
 // =====================================================
 
+// payment.controller.js me purane getPaymentRecords ki jagah ye poora function paste karo
+
+// payment.controller.js me purane getPaymentRecords ki jagah ye poora function paste karo
+
+export const getPaymentRecords = async (req, res) => {
+  try {
+    const owner = getOwner(req);
+
+    if (!owner) {
+      throw httpError("Unauthorized", 401);
+    }
+
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      paymentMethod,
+      farmerID,
+      driverID,
+      workId,
+      fromDate,
+      toDate,
+      advanceOnly,
+    } = req.query;
+
+    const currentPage = Math.max(
+      1,
+      Number.parseInt(page, 10) || 1
+    );
+
+    const pageLimit = Math.min(
+      100,
+      Math.max(1, Number.parseInt(limit, 10) || 10)
+    );
+
+    const filter = { owner };
+
+    if (status) {
+      filter.status = String(status).toUpperCase();
+    }
+
+    if (paymentMethod) {
+      filter.paymentMethod = String(
+        paymentMethod
+      ).toUpperCase();
+    }
+
+    // Sirf wo payments jinme advance jama hua (alag advance + zyada payment ka extra)
+    if (advanceOnly === "true") {
+      filter.advanceAmount = { $gt: 0 };
+    }
+
+    if (farmerID && isValidId(farmerID)) {
+      filter.farmerID = farmerID;
+    }
+
+    if (driverID && isValidId(driverID)) {
+      filter.driverID = driverID;
+    }
+
+    if (workId && isValidId(workId)) {
+      filter.workId = workId;
+    }
+
+    // YYYY-MM-DD ko IST (Asia/Kolkata) din ki seema me badlo,
+    // warna server UTC ke hisaab se raat ke payments galat din me jaate hain.
+    const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    if (fromDate || toDate) {
+      filter.paymentDate = {};
+
+      if (fromDate) {
+        const start = DATE_ONLY.test(String(fromDate))
+          ? new Date(`${fromDate}T00:00:00+05:30`)
+          : new Date(fromDate);
+
+        if (Number.isNaN(start.getTime())) {
+          throw httpError("Invalid fromDate.", 400);
+        }
+
+        filter.paymentDate.$gte = start;
+      }
+
+      if (toDate) {
+        if (DATE_ONLY.test(String(toDate))) {
+          const dayStart = new Date(`${toDate}T00:00:00+05:30`);
+
+          if (Number.isNaN(dayStart.getTime())) {
+            throw httpError("Invalid toDate.", 400);
+          }
+
+          // to-date ka poora IST din shamil
+          filter.paymentDate.$lt = new Date(
+            dayStart.getTime() + DAY_MS
+          );
+        } else {
+          const end = new Date(toDate);
+
+          if (Number.isNaN(end.getTime())) {
+            throw httpError("Invalid toDate.", 400);
+          }
+
+          filter.paymentDate.$lte = end;
+        }
+      }
+    }
+
+    // aggregate() string IDs ko ObjectId me cast nahi karta,
+    // isliye summary ke liye alag filter jisme IDs cast hon.
+    const toObjectId = (id) => new mongoose.Types.ObjectId(id);
+
+    const matchFilter = { ...filter, owner: toObjectId(owner) };
+
+    for (const key of ["farmerID", "driverID", "workId"]) {
+      if (matchFilter[key]) {
+        matchFilter[key] = toObjectId(matchFilter[key]);
+      }
+    }
+
+    const skip = (currentPage - 1) * pageLimit;
+
+    const [
+      payments,
+      totalRecords,
+      [summary = {}],
+    ] = await Promise.all([
+      Payment.find(filter)
+        .populate("farmerID", "name phone village")
+        .populate("driverID", "name phone")
+        .populate("workId", "date totalAmount paidAmount dueAmount")
+        .sort({ paymentDate: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(pageLimit)
+        .lean(),
+
+      Payment.countDocuments(filter),
+
+      Payment.aggregate([
+        { $match: matchFilter },
+        {
+          $group: {
+            _id: null,
+
+            totalAmount: {
+              $sum: "$amount",
+            },
+
+            totalAppliedAmount: {
+              $sum: "$appliedAmount",
+            },
+
+            totalAdvanceAmount: {
+              $sum: "$advanceAmount",
+            },
+
+            successfulAmount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "SUCCESS"] },
+                  "$amount",
+                  0,
+                ],
+              },
+            },
+
+            successfulCount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "SUCCESS"] },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    // Jin payments me advance jama hua, unka hisaab: diya / use hua / bacha
+    const advancePaymentIds = payments
+      .filter((p) => Number(p.advanceAmount || 0) > 0)
+      .map((p) => p._id);
+
+    const advanceLots = advancePaymentIds.length
+      ? await FarmerAdvanceLot.find({
+          owner,
+          paymentId: { $in: advancePaymentIds },
+        })
+          .select("paymentId originalAmount remainingAmount status")
+          .lean()
+      : [];
+
+    const lotByPayment = new Map(
+      advanceLots.map((lot) => [String(lot.paymentId), lot])
+    );
+
+    const paymentsWithAdvance = payments.map((payment) => {
+      const lot = lotByPayment.get(String(payment._id));
+
+      if (!lot) return payment;
+
+      const given = round2(lot.originalAmount || 0);
+      const reversed = lot.status === "REVERSED";
+      const remaining = reversed ? 0 : round2(lot.remainingAmount || 0);
+
+      return {
+        ...payment,
+        advanceInfo: {
+          given,
+          remaining,
+          used: reversed ? 0 : round2(given - remaining),
+          reversed,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      payments: paymentsWithAdvance,
+      summary: {
+        totalAmount: round2(summary.totalAmount || 0),
+        totalAppliedAmount: round2(
+          summary.totalAppliedAmount || 0
+        ),
+        totalAdvanceAmount: round2(
+          summary.totalAdvanceAmount || 0
+        ),
+        successfulAmount: round2(
+          summary.successfulAmount || 0
+        ),
+        successfulCount: summary.successfulCount || 0,
+      },
+      pagination: {
+        currentPage,
+        limit: pageLimit,
+        totalRecords,
+        totalPages: Math.ceil(
+          totalRecords / pageLimit
+        ),
+      },
+    });
+  } catch (error) {
+    return handleError(
+      res,
+      error,
+      "Failed to fetch payment records."
+    );
+  }
+};
+
+// import mongoose from "mongoose";
+
+// payment.controller.js me purane getPaymentRecords ki jagah ye poora function paste karo
+
+
 // export const getPaymentRecords = async (req, res) => {
 //   try {
 //     const owner = getOwner(req);
@@ -1087,149 +1344,233 @@ export const updatePayment = async (req, res) => {
 //       toDate,
 //     } = req.query;
 
-//     const currentPage = Math.max(
-//       1,
-//       Number.parseInt(page, 10) || 1
-//     );
-
+//     const currentPage = Math.max(1, Number.parseInt(page, 10) || 1);
 //     const pageLimit = Math.min(
 //       100,
 //       Math.max(1, Number.parseInt(limit, 10) || 10)
 //     );
 
-//     const filter = { owner };
+//     const validFarmer = farmerID && isValidId(farmerID);
+//     const validDriver = driverID && isValidId(driverID);
+//     const validWork = workId && isValidId(workId);
+
+//     // Date range (IST)
+//     const dateFilter = {};
+
+//     if (fromDate || toDate) {
+//       const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+//       const DAY_MS = 86400000;
+
+//       if (fromDate) {
+//         const start = DATE_ONLY.test(String(fromDate))
+//           ? new Date(`${fromDate}T00:00:00+05:30`)
+//           : new Date(fromDate);
+
+//         if (Number.isNaN(start.getTime())) {
+//           throw httpError("Invalid fromDate", 400);
+//         }
+
+//         dateFilter.$gte = start;
+//       }
+
+//       if (toDate) {
+//         const end = DATE_ONLY.test(String(toDate))
+//           ? new Date(
+//               new Date(`${toDate}T00:00:00+05:30`).getTime() + DAY_MS
+//             )
+//           : new Date(toDate);
+
+//         if (Number.isNaN(end.getTime())) {
+//           throw httpError("Invalid toDate", 400);
+//         }
+
+//         if (DATE_ONLY.test(String(toDate))) {
+//           dateFilter.$lt = end;
+//         } else {
+//           dateFilter.$lte = end;
+//         }
+//       }
+//     }
+
+//     // ---------------------------------
+//     // 1. Actual Payment records
+//     // ---------------------------------
+
+//     const paymentFilter = { owner };
 
 //     if (status) {
-//       filter.status = String(status).toUpperCase();
+//       paymentFilter.status = String(status).toUpperCase();
 //     }
 
 //     if (paymentMethod) {
-//       filter.paymentMethod = String(
+//       paymentFilter.paymentMethod = String(
 //         paymentMethod
 //       ).toUpperCase();
 //     }
 
-//     if (farmerID && isValidId(farmerID)) {
-//       filter.farmerID = farmerID;
+//     if (validFarmer) paymentFilter.farmerID = farmerID;
+//     if (validDriver) paymentFilter.driverID = driverID;
+//     if (validWork) paymentFilter.workId = workId;
+
+//     if (Object.keys(dateFilter).length) {
+//       paymentFilter.paymentDate = dateFilter;
 //     }
 
-//     if (driverID && isValidId(driverID)) {
-//       filter.driverID = driverID;
+//     // ---------------------------------
+//     // 2. Advance adjustment records
+//     // ---------------------------------
+
+//     const allocationFilter = {
+//       owner,
+//       status: "ACTIVE",
+//     };
+
+//     // Only successful transactions are represented
+//     // as completed advance adjustments.
+//     if (status && String(status).toUpperCase() !== "SUCCESS") {
+//       allocationFilter._id = { $exists: false };
 //     }
 
-//     if (workId && isValidId(workId)) {
-//       filter.workId = workId;
+//     // Advance adjustment has no cash/UPI method.
+//     if (paymentMethod) {
+//       allocationFilter._id = { $exists: false };
 //     }
 
-//     if (fromDate || toDate) {
-//       filter.paymentDate = {};
-
-//       if (fromDate) {
-//         const start = new Date(fromDate);
-
-//         if (Number.isNaN(start.getTime())) {
-//           throw httpError("Invalid fromDate.", 400);
-//         }
-
-//         start.setHours(0, 0, 0, 0);
-//         filter.paymentDate.$gte = start;
-//       }
-
-//       if (toDate) {
-//         const end = new Date(toDate);
-
-//         if (Number.isNaN(end.getTime())) {
-//           throw httpError("Invalid toDate.", 400);
-//         }
-
-//         end.setHours(23, 59, 59, 999);
-//         filter.paymentDate.$lte = end;
-//       }
+//     if (validFarmer) {
+//       allocationFilter.farmerID = farmerID;
 //     }
 
-//     const skip = (currentPage - 1) * pageLimit;
+//     if (validWork) {
+//       allocationFilter.workId = workId;
+//     }
 
-//     const [
-//       payments,
-//       totalRecords,
-//       [summary = {}],
-//     ] = await Promise.all([
-//       Payment.find(filter)
+//     if (Object.keys(dateFilter).length) {
+//       allocationFilter.createdAt = dateFilter;
+//     }
+
+//     // ---------------------------------
+//     // 3. Fetch both collections
+//     // ---------------------------------
+
+//     const [payments, allocations, summary] = await Promise.all([
+//       Payment.find(paymentFilter)
 //         .populate("farmerID", "name phone village")
 //         .populate("driverID", "name phone")
 //         .populate("workId", "date totalAmount paidAmount dueAmount")
 //         .sort({ paymentDate: -1, createdAt: -1 })
-//         .skip(skip)
-//         .limit(pageLimit)
 //         .lean(),
 
-//       Payment.countDocuments(filter),
+//       FarmerAdvanceAllocation.find(allocationFilter)
+//         .populate("farmerID", "name phone village")
+//         .populate("workId", "date totalAmount paidAmount dueAmount")
+//         .sort({ createdAt: -1 })
+//         .lean(),
 
 //       Payment.aggregate([
-//         { $match: filter },
+//         {
+//           $match: {
+//             ...paymentFilter,
+//             owner: new mongoose.Types.ObjectId(owner),
+//             ...(validFarmer
+//               ? { farmerID: new mongoose.Types.ObjectId(farmerID) }
+//               : {}),
+//             ...(validDriver
+//               ? { driverID: new mongoose.Types.ObjectId(driverID) }
+//               : {}),
+//             ...(validWork
+//               ? { workId: new mongoose.Types.ObjectId(workId) }
+//               : {}),
+//           },
+//         },
 //         {
 //           $group: {
 //             _id: null,
-
-//             totalAmount: {
-//               $sum: "$amount",
-//             },
-
-//             totalAppliedAmount: {
-//               $sum: "$appliedAmount",
-//             },
-
-//             totalAdvanceAmount: {
-//               $sum: "$advanceAmount",
-//             },
-
-//             successfulAmount: {
-//               $sum: {
-//                 $cond: [
-//                   { $eq: ["$status", "SUCCESS"] },
-//                   "$amount",
-//                   0,
-//                 ],
-//               },
-//             },
-
-//             successfulCount: {
-//               $sum: {
-//                 $cond: [
-//                   { $eq: ["$status", "SUCCESS"] },
-//                   1,
-//                   0,
-//                 ],
-//               },
-//             },
+//             totalAmount: { $sum: "$amount" },
+//             appliedAmount: { $sum: "$appliedAmount" },
+//             advanceAmount: { $sum: "$advanceAmount" },
+//             count: { $sum: 1 },
 //           },
 //         },
 //       ]),
 //     ]);
 
+//     // ---------------------------------
+//     // 4. Convert allocations to records
+//     // ---------------------------------
+
+//     const advanceRecords = allocations.map((allocation) => ({
+//       _id: `ADV-${allocation._id}`,
+
+//       recordType: "ADVANCE_ADJUSTMENT",
+
+//       farmerID: allocation.farmerID,
+//       driverID: null,
+//       workId: allocation.workId,
+
+//       amount: Number(allocation.amount || 0),
+//       appliedAmount: Number(allocation.amount || 0),
+//       advanceAmount: 0,
+
+//       paymentMethod: "ADVANCE",
+//       status: "SUCCESS",
+
+//       paymentDate: allocation.createdAt,
+//       createdAt: allocation.createdAt,
+
+//       sourcePaymentId: allocation.sourcePaymentId,
+//       allocationId: allocation._id,
+
+//       transactionId: `ADV-${String(allocation._id).slice(-8)}`,
+
+//       note: "Due adjusted from existing farmer advance balance",
+//     }));
+
+//     // ---------------------------------
+//     // 5. Merge and paginate
+//     // ---------------------------------
+
+//     const allRecords = [
+//       ...payments.map((payment) => ({
+//         ...payment,
+//         recordType: "PAYMENT",
+//       })),
+//       ...advanceRecords,
+//     ].sort(
+//       (a, b) =>
+//         new Date(b.paymentDate || b.createdAt).getTime() -
+//         new Date(a.paymentDate || a.createdAt).getTime()
+//     );
+
+//     const totalRecords = allRecords.length;
+
+//     const skip = (currentPage - 1) * pageLimit;
+
+//     const paginatedRecords = allRecords.slice(
+//       skip,
+//       skip + pageLimit
+//     );
+
+//     const paymentSummary = summary[0] || {};
+
 //     return res.status(200).json({
 //       success: true,
-//       payments,
+
+//       payments: paginatedRecords,
+
 //       summary: {
-//         totalAmount: round2(summary.totalAmount || 0),
-//         totalAppliedAmount: round2(
-//           summary.totalAppliedAmount || 0
-//         ),
-//         totalAdvanceAmount: round2(
-//           summary.totalAdvanceAmount || 0
-//         ),
-//         successfulAmount: round2(
-//           summary.successfulAmount || 0
-//         ),
-//         successfulCount: summary.successfulCount || 0,
+//         totalAmount: round2(paymentSummary.totalAmount || 0),
+//         appliedAmount: round2(paymentSummary.appliedAmount || 0),
+//         advanceAmount: round2(paymentSummary.advanceAmount || 0),
+//         count: paymentSummary.count || 0,
 //       },
+
 //       pagination: {
 //         currentPage,
 //         limit: pageLimit,
+//         total: totalRecords,
 //         totalRecords,
-//         totalPages: Math.ceil(
-//           totalRecords / pageLimit
-//         ),
+//         pages: Math.ceil(totalRecords / pageLimit),
+//         totalPages: Math.ceil(totalRecords / pageLimit),
 //       },
 //     });
 //   } catch (error) {
@@ -1241,235 +1582,12 @@ export const updatePayment = async (req, res) => {
 //   }
 // };
 
-// import mongoose from "mongoose";
 
-export const getPaymentRecords = async (req, res) => {
-  try {
-    const owner = getOwner(req);
 
-    if (!owner) {
-      throw httpError("Unauthorized", 401);
-    }
-
-    const {
-      page = 1,
-      limit = 10,
-      status,
-      paymentMethod,
-      farmerID,
-      driverID,
-      workId,
-      fromDate,
-      toDate,
-    } = req.query;
-
-    // Pagination
-    const currentPage = Math.max(
-      1,
-      Number.parseInt(page, 10) || 1
-    );
-
-    const pageLimit = Math.min(
-      100,
-      Math.max(1, Number.parseInt(limit, 10) || 10)
-    );
-
-    // 1. Normal MongoDB filter
-    const filter = { owner };
-
-    if (status) {
-      filter.status = String(status).toUpperCase();
-    }
-
-    if (paymentMethod) {
-      filter.paymentMethod = String(
-        paymentMethod
-      ).toUpperCase();
-    }
-
-    if (farmerID && isValidId(farmerID)) {
-      filter.farmerID = farmerID;
-    }
-
-    if (driverID && isValidId(driverID)) {
-      filter.driverID = driverID;
-    }
-
-    if (workId && isValidId(workId)) {
-      filter.workId = workId;
-    }
-
-    // Date filter
-    if (fromDate || toDate) {
-      filter.paymentDate = {};
-
-      if (fromDate) {
-        const start = new Date(fromDate);
-
-        if (Number.isNaN(start.getTime())) {
-          throw httpError("Invalid fromDate.", 400);
-        }
-
-        start.setHours(0, 0, 0, 0);
-        filter.paymentDate.$gte = start;
-      }
-
-      if (toDate) {
-        const end = new Date(toDate);
-
-        if (Number.isNaN(end.getTime())) {
-          throw httpError("Invalid toDate.", 400);
-        }
-
-        end.setHours(23, 59, 59, 999);
-        filter.paymentDate.$lte = end;
-      }
-    }
-
-    // 2. Aggregation filter
-    // Aggregate does not automatically cast string IDs.
-    const aggregateFilter = { ...filter };
-
-    const objectIdFields = [
-      "owner",
-      "farmerID",
-      "driverID",
-      "workId",
-    ];
-
-    for (const field of objectIdFields) {
-      if (aggregateFilter[field]) {
-        if (!mongoose.isValidObjectId(aggregateFilter[field])) {
-          throw httpError(`Invalid ${field}.`, 400);
-        }
-
-        aggregateFilter[field] = new mongoose.Types.ObjectId(
-          aggregateFilter[field]
-        );
-      }
-    }
-
-    const skip = (currentPage - 1) * pageLimit;
-
-    // 3. Fetch records, count and summary
-    const [
-      payments,
-      totalRecords,
-      [summary = {}],
-    ] = await Promise.all([
-      // Payment records
-      Payment.find(filter)
-        .populate("farmerID", "name phone village")
-        .populate("driverID", "name phone")
-        .populate(
-          "workId",
-          "date totalAmount paidAmount dueAmount"
-        )
-        .sort({
-          paymentDate: -1,
-          createdAt: -1,
-        })
-        .skip(skip)
-        .limit(pageLimit)
-        .lean(),
-
-      // Total records
-      Payment.countDocuments(filter),
-
-      // Payment summary
-      Payment.aggregate([
-        {
-          $match: aggregateFilter,
-        },
-
-        {
-          $group: {
-            _id: null,
-
-            totalAmount: {
-              $sum: { $ifNull: ["$amount", 0] },
-            },
-
-            totalAppliedAmount: {
-              $sum: { $ifNull: ["$appliedAmount", 0] },
-            },
-
-            totalAdvanceAmount: {
-              $sum: { $ifNull: ["$advanceAmount", 0] },
-            },
-
-            successfulAmount: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "SUCCESS"] },
-                  { $ifNull: ["$amount", 0] },
-                  0,
-                ],
-              },
-            },
-
-            successfulCount: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "SUCCESS"] },
-                  1,
-                  0,
-                ],
-              },
-            },
-          },
-        },
-      ]),
-    ]);
-
-    // 4. Response
-    return res.status(200).json({
-      success: true,
-
-      payments,
-
-      summary: {
-        totalAmount: round2(
-          summary.totalAmount || 0
-        ),
-
-        totalAppliedAmount: round2(
-          summary.totalAppliedAmount || 0
-        ),
-
-        totalAdvanceAmount: round2(
-          summary.totalAdvanceAmount || 0
-        ),
-
-        successfulAmount: round2(
-          summary.successfulAmount || 0
-        ),
-
-        successfulCount:
-          summary.successfulCount || 0,
-      },
-
-      pagination: {
-        currentPage,
-        limit: pageLimit,
-        totalRecords,
-
-        totalPages: Math.ceil(
-          totalRecords / pageLimit
-        ),
-      },
-    });
-  } catch (error) {
-    console.error("getPaymentRecords error:", error);
-
-    return handleError(
-      res,
-      error,
-      "Failed to fetch payment records."
-    );
-  }
-};
-
+// payment.controller.js me purane receiveFarmerAdvance ki jagah ye poora function paste karo.
+// Naya body field: clearOldDueFirst (true/false). Default false = pehle jaisa behaviour.
+// true = pehle farmer ke purane (STOPPED) works ka due FIFO (purana pehle) chukta hai,
+//        bacha hua paisa hi advance lot me jaata hai.
 
 export const receiveFarmerAdvance = async (req, res) => {
   const session = await mongoose.startSession();
@@ -1483,6 +1601,10 @@ export const receiveFarmerAdvance = async (req, res) => {
       note,
     } = req.body;
 
+    const clearOldDueFirst =
+      req.body.clearOldDueFirst === true ||
+      req.body.clearOldDueFirst === "true";
+
     if (!owner) {
       throw httpError("Unauthorized", 401);
     }
@@ -1491,11 +1613,11 @@ export const receiveFarmerAdvance = async (req, res) => {
       throw httpError("Valid farmer ID is required.", 400);
     }
 
-    const advanceAmount = round2(amount);
+    const receivedAmount = round2(amount);
 
     if (
-      !Number.isFinite(advanceAmount) ||
-      advanceAmount <= 0
+      !Number.isFinite(receivedAmount) ||
+      receivedAmount <= 0
     ) {
       throw httpError(
         "Advance amount must be greater than zero.",
@@ -1521,63 +1643,150 @@ export const receiveFarmerAdvance = async (req, res) => {
         throw httpError("Farmer not found.", 404);
       }
 
+      let remaining = receivedAmount;
+      const clearedDues = [];
+
       // -----------------------------------------
-      // Add amount to farmer advance balance
+      // STEP 1 (optional): purana due pehle chukao
+      // Oldest work first. Sirf STOPPED works, taaki
+      // chalte hue kaam ka abhi ka due na chhua jaye.
       // -----------------------------------------
 
-      farmer.advanceAmount = round2(
-        Number(farmer.advanceAmount || 0) +
-        advanceAmount
+      if (clearOldDueFirst) {
+        const dueWorks = await WorkLog.find({
+          owner,
+          farmer: farmer._id,
+          status: "STOPPED",
+          dueAmount: { $gt: 0 },
+        })
+          .sort({ date: 1, _id: 1 })
+          .session(session);
+
+        for (const work of dueWorks) {
+          if (remaining <= 0) break;
+
+          const totalAmount = round2(work.totalAmount || 0);
+          const currentPaid = round2(work.paidAmount || 0);
+          const due = Math.max(
+            0,
+            round2(totalAmount - currentPaid)
+          );
+
+          const applied = round2(Math.min(remaining, due));
+
+          if (applied <= 0) continue;
+
+          work.paidAmount = round2(currentPaid + applied);
+          work.dueAmount = Math.max(
+            0,
+            round2(totalAmount - work.paidAmount)
+          );
+          work.paymentStatus = getPaymentStatus(
+            work.paidAmount,
+            work.dueAmount
+          );
+
+          await work.save({ session });
+
+          const [workPayment] = await Payment.create(
+            [
+              {
+                owner,
+                driverID: null,
+                farmerID: farmer._id,
+                workId: work._id,
+                paymentType: "WORK_PAYMENT",
+
+                amount: applied,
+                appliedAmount: applied,
+                advanceAmount: 0,
+
+                paymentMethod: method,
+                status: "SUCCESS",
+
+                transactionId: `ADVDUE-${Date.now()}-${Math.random()
+                  .toString(36)
+                  .slice(2, 8)
+                  .toUpperCase()}`,
+
+                note: note
+                  ? `${note} (old due cleared from advance receipt)`
+                  : "Old due cleared from advance receipt",
+                dueAmount: work.dueAmount,
+                paymentDate: new Date(),
+              },
+            ],
+            { session }
+          );
+
+          clearedDues.push({
+            workId: work._id,
+            paymentId: workPayment._id,
+            applied,
+            remainingDue: work.dueAmount,
+          });
+
+          remaining = round2(remaining - applied);
+        }
+      }
+
+      const totalDueCleared = round2(
+        receivedAmount - remaining
       );
 
-      await farmer.save({ session });
-
       // -----------------------------------------
-      // Create independent advance payment
+      // STEP 2: jo bacha wo advance (FIFO lot)
       // -----------------------------------------
 
-      const [payment] = await Payment.create(
-        [
-          {
-            owner,
-            driverID: null,
-            farmerID: farmer._id,
-            workId: null,
-            paymentType: "ADVANCE",
+      let payment = null;
+      let lot = null;
 
-            amount: advanceAmount,
-            appliedAmount: 0,
-            advanceAmount,
+      if (remaining > 0) {
+        farmer.advanceAmount = round2(
+          Number(farmer.advanceAmount || 0) + remaining
+        );
 
-            paymentMethod: method,
-            status: "SUCCESS",
+        await farmer.save({ session });
 
-            transactionId: `ADV-${Date.now()}-${Math.random()
-              .toString(36)
-              .slice(2, 8)
-              .toUpperCase()}`,
+        [payment] = await Payment.create(
+          [
+            {
+              owner,
+              driverID: null,
+              farmerID: farmer._id,
+              workId: null,
+              paymentType: "ADVANCE",
 
-            note: note || "",
-            dueAmount: 0,
-            paymentDate: new Date(),
-          },
-        ],
-        { session }
-      );
+              amount: remaining,
+              appliedAmount: 0,
+              advanceAmount: remaining,
 
-      // -----------------------------------------
-      // Create FIFO source lot + CREDIT ledger
-      // -----------------------------------------
+              paymentMethod: method,
+              status: "SUCCESS",
 
-      const lot = await createAdvanceLot({
-        farmer,
-        owner,
-        amount: advanceAmount,
-        paymentId: payment._id,
-        sourceType: "PAYMENT",
-        description: `Advance received from farmer through payment ${payment._id}`,
-        session,
-      });
+              transactionId: `ADV-${Date.now()}-${Math.random()
+                .toString(36)
+                .slice(2, 8)
+                .toUpperCase()}`,
+
+              note: note || "",
+              dueAmount: 0,
+              paymentDate: new Date(),
+            },
+          ],
+          { session }
+        );
+
+        lot = await createAdvanceLot({
+          farmer,
+          owner,
+          amount: remaining,
+          paymentId: payment._id,
+          sourceType: "PAYMENT",
+          description: `Advance received from farmer through payment ${payment._id}`,
+          session,
+        });
+      }
 
       // -----------------------------------------
       // Sync farmer summary
@@ -1593,13 +1802,24 @@ export const receiveFarmerAdvance = async (req, res) => {
         payment,
         advanceLot: lot,
         farmerAdvance: farmer.advanceAmount,
+        received: receivedAmount,
+        dueCleared: totalDueCleared,
+        advanceCredited: remaining,
+        clearedDues,
         summary,
       };
     });
 
+    const message =
+      responseData.dueCleared > 0
+        ? responseData.advanceCredited > 0
+          ? `₹${responseData.dueCleared} purana due clear hua, ₹${responseData.advanceCredited} advance me jama hua.`
+          : `₹${responseData.dueCleared} purana due clear hua.`
+        : "Farmer advance received successfully.";
+
     return res.status(201).json({
       success: true,
-      message: "Farmer advance received successfully.",
+      message,
       ...responseData,
     });
   } catch (error) {

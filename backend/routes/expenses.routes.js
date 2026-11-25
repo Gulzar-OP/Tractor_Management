@@ -5,14 +5,16 @@ import {
   getExpenseById,
   deleteExpense,
 } from "../controllers/expenses.controller.js";
-import { protect } from "../middleware/auth.middleware.js";
+import { protect, isOwner } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-router.get("/all-expenses",protect, allExpenses);
-router.post("/add",protect, addExpense);
+// Driver kharcha add kar sakta hai, par list/delete sirf owner
+// (report me bhi kharcha sirf owner ko dikhta hai).
+router.post("/add", protect, addExpense);
 
-router.get("/:id",protect, getExpenseById);
-router.delete("/:id",protect, deleteExpense);
+router.get("/all-expenses", protect, isOwner, allExpenses);
+router.get("/:id", protect, isOwner, getExpenseById);
+router.delete("/:id", protect, isOwner, deleteExpense);
 
 export default router;

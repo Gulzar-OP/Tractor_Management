@@ -104,6 +104,7 @@ const PaymentRecords = () => {
   const [statusFilter, setStatusFilter] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [advanceOnly, setAdvanceOnly] = useState(false);
 
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -134,11 +135,14 @@ const PaymentRecords = () => {
 
         setError("");
 
+        // Backend ke naam: paymentMethod / fromDate / toDate
+        // (pehle method / from / to bhej rahe the, isliye filters kaam nahi karte the)
         const params = { page, limit: PAGE_LIMIT };
-        if (methodFilter) params.method = methodFilter;
+        if (methodFilter) params.paymentMethod = methodFilter;
         if (statusFilter) params.status = statusFilter;
-        if (fromDate) params.from = fromDate;
-        if (toDate) params.to = toDate;
+        if (fromDate) params.fromDate = fromDate;
+        if (toDate) params.toDate = toDate;
+        if (advanceOnly) params.advanceOnly = "true";
 
         const { data } = await axios.get(`${API}/records`, {
           params,
@@ -152,10 +156,18 @@ const PaymentRecords = () => {
           throw new Error(data.message || "Unable to fetch payments");
         }
 
+        const s = data.summary || {};
+        const records = data.pagination?.totalRecords ?? data.pagination?.total ?? 0;
+
         setPayments(data.payments || []);
-        setSummary(data.summary || EMPTY_SUMMARY);
-        setTotalPages(data.pagination?.pages || 1);
-        setTotalRecords(data.pagination?.total || 0);
+        setSummary({
+          totalAmount: s.totalAmount ?? 0,
+          appliedAmount: s.totalAppliedAmount ?? s.appliedAmount ?? 0,
+          advanceAmount: s.totalAdvanceAmount ?? s.advanceAmount ?? 0,
+          count: s.successfulCount ?? s.count ?? records,
+        });
+        setTotalPages(data.pagination?.totalPages ?? data.pagination?.pages ?? 1);
+        setTotalRecords(records);
       } catch (err) {
         if (reqId !== reqRef.current) return;
         console.error("FETCH PAYMENT RECORDS ERROR:", err);
@@ -175,7 +187,7 @@ const PaymentRecords = () => {
         }
       }
     },
-    [page, methodFilter, statusFilter, fromDate, toDate]
+    [page, methodFilter, statusFilter, fromDate, toDate, advanceOnly]
   );
 
   useEffect(() => {
@@ -202,7 +214,9 @@ const PaymentRecords = () => {
     });
   }, [payments, search]);
 
-  const hasFilters = Boolean(search || methodFilter || statusFilter || fromDate || toDate);
+  const hasFilters = Boolean(
+    search || methodFilter || statusFilter || fromDate || toDate || advanceOnly
+  );
 
   const resetFilters = () => {
     setSearch("");
@@ -210,6 +224,7 @@ const PaymentRecords = () => {
     setStatusFilter("");
     setFromDate("");
     setToDate("");
+    setAdvanceOnly(false);
     setPage(1);
   };
 
@@ -445,6 +460,23 @@ const PaymentRecords = () => {
               </button>
             );
           })}
+
+          <button
+            type="button"
+            onClick={() => {
+              setAdvanceOnly((prev) => !prev);
+              setPage(1);
+            }}
+            aria-pressed={advanceOnly}
+            className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold transition ${
+              advanceOnly
+                ? "bg-amber-500 text-white shadow-md shadow-amber-500/25"
+                : "bg-amber-50 text-amber-700 hover:bg-amber-100"
+            }`}
+          >
+            <Wallet size={14} />
+            Advance only
+          </button>
 
           <select
             value={statusFilter}
@@ -824,8 +856,18 @@ function PaymentRow({ payment, deleting, onEdit, onDelete }) {
   const farmerName = payment.farmerID?.name || "Unknown Farmer";
   const MethodIcon = METHODS.find((m) => m.id === payment.paymentMethod)?.icon || Wallet;
 
+  // Advance jama hua ho (alag se advance ya zyada payment ka extra) to row highlight
+  const hasAdvance = advance > 0;
+  const isAdvanceOnly = payment.paymentType === "ADVANCE";
+
   return (
-    <li className="grid gap-4 p-5 transition hover:bg-emerald-50/30 lg:grid-cols-12 lg:items-center">
+    <li
+      className={`grid gap-4 p-5 transition lg:grid-cols-12 lg:items-center ${
+        hasAdvance
+          ? "border-l-4 border-amber-400 bg-amber-50/70 hover:bg-amber-50"
+          : "border-l-4 border-transparent hover:bg-emerald-50/30"
+      }`}
+    >
       {/* Farmer */}
       <div className="flex min-w-0 items-center gap-3 lg:col-span-4">
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-500 text-sm font-bold text-white shadow-md">
@@ -842,7 +884,17 @@ function PaymentRow({ payment, deleting, onEdit, onDelete }) {
 
       {/* Amount + split */}
       <div className="lg:col-span-3">
-        <p className="text-lg font-extrabold tabular-nums text-stone-900">
+        {hasAdvance && (
+          <span className="mb-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-800 ring-1 ring-amber-300">
+            <Wallet size={10} />
+            {isAdvanceOnly ? "Advance received" : `+ ${money(advance)} advance`}
+          </span>
+        )}
+        <p
+          className={`text-lg font-extrabold tabular-nums ${
+            hasAdvance ? "text-amber-900" : "text-stone-900"
+          }`}
+        >
           {money(amount)}
         </p>
         <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-stone-100">
@@ -851,8 +903,42 @@ function PaymentRow({ payment, deleting, onEdit, onDelete }) {
         </div>
         <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] font-semibold">
           <span className="text-emerald-700">Applied {money(applied)}</span>
-          <span className="text-amber-700">Advance {money(advance)}</span>
+          <span className={hasAdvance ? "font-extrabold text-amber-800" : "text-amber-700"}>
+            Advance {money(advance)}
+          </span>
         </p>
+
+        {hasAdvance && payment.advanceInfo && (
+          <div className="mt-2 rounded-lg bg-white/80 p-2 ring-1 ring-amber-200">
+            {payment.advanceInfo.reversed ? (
+              <p className="text-[11px] font-bold text-rose-600">
+                Advance reverse ho chuka hai
+              </p>
+            ) : (
+              <>
+                <div className="flex h-1.5 overflow-hidden rounded-full bg-amber-100">
+                  <div
+                    className="h-full bg-amber-500"
+                    style={{
+                      width: `${
+                        payment.advanceInfo.given > 0
+                          ? Math.min(100, (payment.advanceInfo.used / payment.advanceInfo.given) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] font-semibold">
+                  <span className="text-stone-700">Diya {money(payment.advanceInfo.given)}</span>
+                  <span className="text-amber-800">Use {money(payment.advanceInfo.used)}</span>
+                  <span className="font-extrabold text-emerald-700">
+                    Bacha {money(payment.advanceInfo.remaining)}
+                  </span>
+                </p>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Method + date */}

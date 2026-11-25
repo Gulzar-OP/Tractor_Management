@@ -18,6 +18,8 @@ import {
   LogOut,
   LogIn,
   X,
+  Megaphone,
+  BookOpen,
 } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { getCurrentUser, logoutUser } from "../redux/slice/authSlice";
@@ -42,6 +44,16 @@ const OWNER_NAV = [
   { group: "Money", label: "Expenses", path: "/expenses", icon: Receipt },
   { group: "More", label: "Reports", path: "/reports", icon: BarChart3 },
   { group: "More", label: "Settings", path: "/settings", icon: SettingsIcon },
+  { group: "More",
+  label: "What's New",
+  path: "/changelog",
+  icon: Megaphone,
+},
+{ group: "More",
+  label: "Help & Guidelines",
+  path: "/help",
+  icon: BookOpen,
+}
 ];
 
 const DRIVER_NAV = [
@@ -51,10 +63,32 @@ const DRIVER_NAV = [
   { group: "Work", label: "Add Work", path: "/workRecords/add", icon: PlusCircle },
   { group: "Work", label: "Works Start", path: "/workRecords/work", icon: Play },
   { group: "Money", label: "Payments", path: "/payments", icon: Wallet },
+  { group: "Money", label: "Payment Records", path: "/payment-records", icon: ReceiptText },
   { group: "Money", label: "Due Summary", path: "/farmers/due-summary", icon: AlertCircle, end: true },
   { group: "More", label: "Reports", path: "/reports", icon: BarChart3 },
   { group: "More", label: "Settings", path: "/settings", icon: SettingsIcon },
+  { group: "More",
+  label: "What's New",
+  path: "/changelog",
+  icon: Megaphone,
+},{ group: "More",
+  label: "Help & Guidelines",
+  path: "/help",
+  icon: BookOpen,
+}
 ];
+const ADMIN_NAV =[
+  {
+  label: "Manage Updates",
+  path: "/manage-updates",
+  icon: Megaphone,
+},
+{ 
+  label: "What's New",
+  path: "/changelog",
+  icon: Megaphone,
+}
+]
 
 const STATUS_UI = {
   RUNNING: {
@@ -283,7 +317,12 @@ export default function Sidebar({ mobileOpen, setMobileOpen }) {
 
   const role = user?.role; // "owner" | "driver"
   // If the role is missing the driver menu is shown, so the menu is never empty
-  const NAV = role === "owner" ? OWNER_NAV : DRIVER_NAV;
+  const NAV =
+  role === "owner"
+    ? OWNER_NAV
+    : role === "admin"
+    ? ADMIN_NAV
+    : DRIVER_NAV;
   const close = () => setMobileOpen(false);
 
   const handleLogout = async () => {

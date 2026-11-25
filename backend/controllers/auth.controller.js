@@ -1,9 +1,18 @@
-import mongoose from "mongoose";
-import User from '../models/user.model.js'
-import bcrypt from 'bcrypt'
-import jwt from 'jsonwebtoken'
+import User from "../models/user.model.js";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+// User na milne par bhi bcrypt chalao, taaki response time se
+// pata na chale ki email registered hai ya nahi.
+const DUMMY_HASH = bcrypt.hashSync("dummy-password-for-timing", 10);
+
+const cookieOptions = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+};
 
 export const register = async (req, res) => {
   try {
@@ -48,8 +57,12 @@ export const register = async (req, res) => {
 
 export const login = async (req, res) => {
   try {
-    const email = req.body.email?.trim().toLowerCase();
-    const password = req.body.password;
+    const email =
+      typeof req.body.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "";
+    const password =
+      typeof req.body.password === "string" ? req.body.password : "";
 
     if (!email || !password) {
       return res.status(400).json({
@@ -58,85 +71,53 @@ export const login = async (req, res) => {
       });
     }
 
-    console.log("Login email:", email);
-    console.log("Database:", mongoose.connection.name);
-
     const user = await User.findOne({ email });
 
-    console.log("Found user:", user ? user.email : "Not found");
+    const isMatch = await bcrypt.compare(
+      password,
+      user ? user.password : DUMMY_HASH
+    );
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    console.log("Password match:", isMatch);
-    if (!isMatch) {
+    // Email galat ho ya password, dono me ek jaisa jawab
+    if (!user || !isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Invalid credentials",
+        message: "Invalid email or password",
       });
     }
-    console.log("1. User found");
-console.log("2. Password match:", isMatch);
 
-const token = jwt.sign(
-  {
-    userId: user._id,
-    role: user.role,
-    ownerId: user.role === "owner" ? user._id : user.owner,
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: "7d" }
-);
-return res
-  .cookie("authToken", token, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  })
-  .json({
-    success: true,
-    message: "Login successful",
-    user: {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
-  });
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Account is disabled. Contact your owner.",
+      });
+    }
 
-    // const token = jwt.sign(
-    //   {
-    //     userId: user._id,
-    //     role: user.role,
-    //     ownerId: user.role === "owner" ? user._id : user.owner,
-    //   },
-    //   process.env.JWT_SECRET,
-    //   { expiresIn: "7d" }
-    // );
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        role: user.role,
+        ownerId: user.role === "owner" ? user._id : user.owner,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
-    // return res
-    //   .cookie("authToken", token, {
-    //     httpOnly: true,
-    //     secure: isProduction,
-    //     sameSite: isProduction ? "none" : "lax",
-    //     maxAge: 7 * 24 * 60 * 60 * 1000,
-    //   })
-    //   .json({
-    //     success: true,
-    //     message: "Login successful",
-    //     user: {
-    //       _id: user._id,
-    //       name: user.name,
-    //       email: user.email,
-    //       role: user.role,
-    //     },
-    //   });
+    return res
+      .cookie("authToken", token, {
+        ...cookieOptions,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      })
+      .json({
+        success: true,
+        message: "Login successful",
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
   } catch (err) {
     console.error("Login error:", err);
 
@@ -147,20 +128,14 @@ return res
   }
 };
 
-
 export const logout = (req, res) => {
-  res.clearCookie("authToken", {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
-  });
+  res.clearCookie("authToken", cookieOptions);
 
   return res.status(200).json({
     success: true,
     message: "Logout successful",
   });
 };
-
 
 export const me = async (req, res) => {
   try {
@@ -177,11 +152,11 @@ export const me = async (req, res) => {
       success: true,
       user,
     });
-
   } catch (err) {
+    console.error("me error:", err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
@@ -191,6 +166,7 @@ export const allDriver = async (req, res) => {
     const drivers = await User.find({
       owner: req.ownerId,
       role: "driver",
+      isActive: { $ne: false },
     }).select("-password");
 
     res.status(200).json({
@@ -198,11 +174,11 @@ export const allDriver = async (req, res) => {
       count: drivers.length,
       drivers,
     });
-
   } catch (err) {
+    console.error("allDriver error:", err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };

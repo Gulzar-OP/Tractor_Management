@@ -17,6 +17,7 @@ const farmerSchema = new mongoose.Schema({
   phone: String,
   village: String,
   address: String,
+  district: String,
   nameSearch: {
     type: String,
     default: "",
@@ -48,6 +49,12 @@ const farmerSchema = new mongoose.Schema({
     },
   ],
   notes: { type: String },
+
+  // Delete ki jagah archive: data bacha rehta hai, bas lists/search se hat jaata hai
+  isArchived: { type: Boolean, default: false, index: true },
+  archivedAt: { type: Date, default: null },
 });
+
+farmerSchema.index({ owner: 1, isArchived: 1, name: 1 });
 
 export default mongoose.model("Farmer", farmerSchema);

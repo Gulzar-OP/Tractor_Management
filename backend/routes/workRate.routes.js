@@ -9,23 +9,18 @@ import {
   deleteRate,
 } from "../controllers/workRate.controller.js";
 
-// Replace this with whatever middleware already guards your
-// /api/farmer/* and /api/auth/me routes (e.g. verifyOwner, protect...).
-// It just needs to set req.owner (or req.user) from the auth cookie.
-import { protect } from "../middleware/auth.middleware.js";
+import { protect, isOwner } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
 router.get("/rates", protect, getRates);
-router.put("/rates", protect, updateRates);
-router.post("/",protect,addRates)
+// Rates badalna / jodna / hatana sirf owner (driver sirf rates padh sakta hai)
+router.put("/rates", protect, isOwner, updateRates);
+router.post("/", protect, isOwner, addRates);
+router.delete("/:id", protect, isOwner, deleteRate);
 router.post("/get-rate", protect, getRateByType);
 router.get("/profile", protect, getProfile);
 router.patch("/profile", protect, updateProfile);
-router.delete("/:id", protect, deleteRate)
+
 
 export default router;
-
-// In your main app/server file, mount this with:
-//   import settingsRoutes from "./routes/settingsRoutes.js";
-//   app.use("/api/settings", settingsRoutes);

@@ -1,4 +1,3 @@
-
 import mongoose from "mongoose";
 import { scopeFilter } from "./work.controller.js";
 import WorkLog from "../models/work.model.js";
@@ -9,7 +8,11 @@ export const dueSummary = async (req, res) => {
     const filter = scopeFilter(req);
 
     // 2. Convert string IDs into ObjectIds
-    const aggregateFilter = { ...filter };
+    // CANCELLED works due/billed me nahi ginne chahiye
+    const aggregateFilter = {
+      ...filter,
+      status: { $ne: "CANCELLED" },
+    };
 
     if (aggregateFilter.owner) {
       aggregateFilter.owner = new mongoose.Types.ObjectId(
@@ -155,12 +158,20 @@ export const dueSummary = async (req, res) => {
       farmers,
     });
   } catch (error) {
-    console.error("Due summary error:", error);
+    const statusCode = Number.isInteger(error.statusCode)
+      ? error.statusCode
+      : 500;
 
-    return res.status(500).json({
+    if (statusCode === 500) {
+      console.error("Due summary error:", error);
+    }
+
+    return res.status(statusCode).json({
       success: false,
-      message: "Failed to fetch due summary",
-      error: error.message,
+      message:
+        statusCode === 500
+          ? "Failed to fetch due summary"
+          : error.message,
     });
   }
 };

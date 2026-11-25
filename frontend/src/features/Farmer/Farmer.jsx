@@ -25,6 +25,8 @@ import {
   FileText,
   Search,
   Trash2,
+  Archive,
+  ArchiveRestore,
   CheckCircle2,
   AlertCircle,
   SearchX,
@@ -40,6 +42,8 @@ const API = `${API_BASE}/api`;
 const FARMERS_URL = `${API}/farmer/all-farmer`;
 const ADD_FARMER_URL = `${API}/farmer`;
 const DELETE_FARMER_URL = (id) => `${API}/farmer/deleteFarmer/${id}`;
+const ARCHIVE_FARMER_URL = (id) => `${API}/farmer/archive/${id}`;
+const RESTORE_FARMER_URL = (id) => `${API}/farmer/restore/${id}`;
 
 const EMPTY_FORM = {
   name: "",
@@ -159,12 +163,17 @@ export default function Farmers() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [pageNum, setPageNum] = useState(1);
+  // "active" = normal list, "archived" = archived farmers (restore screen)
+  const [view, setView] = useState("active");
+  const isArchivedView = view === "archived";
 
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  // { id, name, mode: "archive" | "delete" }
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [restoringId, setRestoringId] = useState(null);
 
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
@@ -239,7 +248,11 @@ export default function Farmers() {
     setError(null);
 
     try {
-      const res = await axios.post(FARMERS_URL, {}, { withCredentials: true });
+      const res = await axios.post(
+        FARMERS_URL,
+        { archived: isArchivedView },
+        { withCredentials: true }
+      );
 
       const farmers =
         res.data?.farmers || res.data?.data?.farmers || res.data?.data || [];
@@ -252,7 +265,7 @@ export default function Farmers() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isArchivedView]);
 
   useEffect(() => {
     if (authLoading || !isLoggedIn) {
@@ -391,17 +404,59 @@ export default function Farmers() {
     setDeletingId(target.id);
 
     try {
-      await axios.delete(DELETE_FARMER_URL(target.id), { withCredentials: true });
+      if (target.mode === "archive") {
+        const res = await axios.post(
+          ARCHIVE_FARMER_URL(target.id),
+          {},
+          { withCredentials: true }
+        );
+        showToast("success", res.data?.message || "Farmer archived.");
+        if (res.data?.warning) {
+          setTimeout(() => showToast("success", res.data.warning), 3000);
+        }
+      } else {
+        await axios.delete(DELETE_FARMER_URL(target.id), { withCredentials: true });
+        showToast("success", "Farmer permanently deleted.");
+      }
+
       setData((prev) => prev.filter((f) => f._id !== target.id));
       setDeleteTarget(null);
-      showToast("success", "Farmer deleted successfully.");
     } catch (err) {
-      console.error("Error deleting farmer:", err.response?.data || err);
-      // A failed delete must not replace the whole list with the error screen
-      showToast("error", err.response?.data?.message || "Couldn't delete farmer. Please try again.");
+      console.error("Farmer action failed:", err.response?.data || err);
+      // A failed action must not replace the whole list with the error screen
+      showToast(
+        "error",
+        err.response?.data?.message ||
+          (target.mode === "archive"
+            ? "Couldn't archive farmer. Please try again."
+            : "Couldn't delete farmer. Please try again.")
+      );
     } finally {
       setDeletingId(null);
     }
+  };
+
+  const restoreFarmer = async (farmer) => {
+    setRestoringId(farmer._id);
+
+    try {
+      await axios.post(RESTORE_FARMER_URL(farmer._id), {}, { withCredentials: true });
+      setData((prev) => prev.filter((f) => f._id !== farmer._id));
+      showToast("success", `${farmer.name || "Farmer"} restored.`);
+    } catch (err) {
+      console.error("Restore failed:", err.response?.data || err);
+      showToast("error", err.response?.data?.message || "Couldn't restore farmer.");
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  const switchView = (next) => {
+    if (next === view) return;
+    setView(next);
+    setSearch("");
+    setFilter("all");
+    setPageNum(1);
   };
 
   /* ---------------- cleanup + Escape ---------------- */
@@ -550,7 +605,8 @@ export default function Farmers() {
               {data.length}
             </p>
             <p className="mt-1 text-sm text-emerald-100/80">
-              registered farmer{data.length === 1 ? "" : "s"} · manage records, payments and advances
+              {isArchivedView ? "archived" : "registered"} farmer{data.length === 1 ? "" : "s"}
+              {isArchivedView ? " · restore them any time" : " · manage records, payments and advances"}
             </p>
 
             <button
@@ -646,6 +702,28 @@ export default function Farmers() {
           </button>
         </div>
 
+        <div className="inline-flex rounded-2xl bg-stone-100 p-1">
+          {[
+            { id: "active", label: "Active" },
+            { id: "archived", label: "Archived" },
+          ].map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => switchView(v.id)}
+              aria-pressed={view === v.id}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-1.5 text-sm font-bold transition ${
+                view === v.id
+                  ? "bg-white text-emerald-700 shadow-sm"
+                  : "text-stone-500 hover:text-stone-700"
+              }`}
+            >
+              {v.id === "archived" && <Archive size={14} />}
+              {v.label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex flex-wrap gap-2">
           {FILTERS.map((f) => {
             const active = filter === f.id;
@@ -712,14 +790,21 @@ export default function Farmers() {
             {data.length === 0 ? <Users size={28} /> : <SearchX size={28} />}
           </div>
           <h2 className="mt-4 font-bold text-stone-700">
-            {data.length === 0 ? "No farmers yet" : "No farmers found"}
+            {data.length === 0
+              ? isArchivedView
+                ? "No archived farmers"
+                : "No farmers yet"
+              : "No farmers found"}
           </h2>
           <p className="mt-1 text-sm text-stone-400">
             {data.length === 0
-              ? "Add your first farmer to get started."
+              ? isArchivedView
+                ? "Farmers you archive will show up here."
+                : "Add your first farmer to get started."
               : "Try a different name, village, or filter."}
           </p>
           {data.length === 0 ? (
+            isArchivedView ? null :
             <button
               type="button"
               onClick={() => setShowAddModal(true)}
@@ -788,23 +873,61 @@ export default function Farmers() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteTarget({ id: f._id, name: f.name });
-                      }}
-                      disabled={deletingId === f._id}
-                      className="rounded-xl p-2 text-stone-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
-                      aria-label={`Delete ${f.name || "farmer"}`}
-                      title="Delete farmer"
-                    >
-                      {deletingId === f._id ? (
-                        <Loader2 size={16} className="animate-spin" />
+                    <div className="flex shrink-0 items-center gap-1">
+                      {isArchivedView ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              restoreFarmer(f);
+                            }}
+                            disabled={restoringId === f._id}
+                            className="inline-flex items-center gap-1 rounded-xl bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-40"
+                            aria-label={`Restore ${f.name || "farmer"}`}
+                            title="Restore farmer"
+                          >
+                            {restoringId === f._id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <ArchiveRestore size={14} />
+                            )}
+                            Restore
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteTarget({ id: f._id, name: f.name, mode: "delete" });
+                            }}
+                            disabled={deletingId === f._id}
+                            className="rounded-xl p-2 text-stone-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-40"
+                            aria-label={`Delete ${f.name || "farmer"} permanently`}
+                            title="Delete permanently"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </>
                       ) : (
-                        <Trash2 size={16} />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteTarget({ id: f._id, name: f.name, mode: "archive" });
+                          }}
+                          disabled={deletingId === f._id}
+                          className="rounded-xl p-2 text-stone-300 transition hover:bg-amber-50 hover:text-amber-600 disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                          aria-label={`Archive ${f.name || "farmer"}`}
+                          title="Archive farmer"
+                        >
+                          {deletingId === f._id ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <Archive size={16} />
+                          )}
+                        </button>
                       )}
-                    </button>
+                    </div>
                   </div>
 
                   <div className="mt-5 grid grid-cols-2 gap-2.5">
@@ -1144,15 +1267,23 @@ export default function Farmers() {
             role="dialog"
             aria-modal="true"
           >
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">
-              <Trash2 size={22} />
+            <div
+              className={`flex h-12 w-12 items-center justify-center rounded-2xl ${
+                deleteTarget.mode === "archive"
+                  ? "bg-amber-100 text-amber-600"
+                  : "bg-rose-100 text-rose-600"
+              }`}
+            >
+              {deleteTarget.mode === "archive" ? <Archive size={22} /> : <Trash2 size={22} />}
             </div>
             <h3 className="mt-4 text-lg font-extrabold text-stone-900">
-              Delete {deleteTarget.name || "this farmer"}?
+              {deleteTarget.mode === "archive" ? "Archive" : "Permanently delete"}{" "}
+              {deleteTarget.name || "this farmer"}?
             </h3>
             <p className="mt-1.5 text-sm leading-relaxed text-stone-500">
-              This permanently deletes the farmer and all related works and payments.
-              This action cannot be undone.
+              {deleteTarget.mode === "archive"
+                ? "The farmer is hidden from lists and search, but all works, payments, dues and advance are kept. You can restore anytime from the Archived tab."
+                : "This permanently deletes the farmer and all related works, payments and advance records. This action cannot be undone."}
             </p>
             <div className="mt-6 flex gap-3">
               <button
@@ -1167,10 +1298,20 @@ export default function Farmers() {
                 type="button"
                 onClick={confirmDelete}
                 disabled={Boolean(deletingId)}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-rose-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60"
+                className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold text-white transition disabled:opacity-60 ${
+                  deleteTarget.mode === "archive"
+                    ? "bg-amber-500 hover:bg-amber-600"
+                    : "bg-rose-600 hover:bg-rose-700"
+                }`}
               >
                 {deletingId && <Loader2 size={15} className="animate-spin" />}
-                {deletingId ? "Deleting..." : "Delete"}
+                {deleteTarget.mode === "archive"
+                  ? deletingId
+                    ? "Archiving..."
+                    : "Archive"
+                  : deletingId
+                    ? "Deleting..."
+                    : "Delete forever"}
               </button>
             </div>
           </div>

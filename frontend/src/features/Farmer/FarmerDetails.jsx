@@ -7,6 +7,7 @@ import React, {
 import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "react-hot-toast";
+import { useSelector } from "react-redux";
 
 import {
   Phone,
@@ -28,10 +29,21 @@ import {
   Layers,
   Banknote,
   Timer,
+  Wrench,
+  Loader2,
+  ArchiveRestore,
+  FileDown,
+  Send,
+  Share2,
 } from "lucide-react";
 
 import Badge from "../../components/UI/Badge";
 import PrimaryButton from "../../components/UI/PrimaryButton";
+import {
+  buildFarmerStatementPdf,
+  downloadBlob,
+  toWhatsAppNumber,
+} from "../../utils/farmerStatementPdf";
 
 const API_BASE =
   import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
@@ -257,6 +269,9 @@ export default function FarmerDetails() {
   const { farmerId } = useParams();
   const navigate = useNavigate();
 
+  const { user } = useSelector((state) => state.auth);
+  const isOwner = user?.role === "owner";
+
   const [farmer, setFarmer] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -264,6 +279,22 @@ export default function FarmerDetails() {
     startDate: "",
     endDate: "",
   });
+
+  // Advance ledger check/repair modal
+  const [ledger, setLedger] = useState({
+    open: false,
+    loading: false,
+    applying: false,
+    data: null,
+  });
+  const [restoring, setRestoring] = useState(false);
+
+  // Advance: kitna diya / kitna use hua / kitna bacha
+  const [advanceHistory, setAdvanceHistory] = useState(null);
+  const [showAllLots, setShowAllLots] = useState(false);
+
+  // "download" | "share" | "send" | "" (kaun sa PDF action chal raha hai)
+  const [pdfBusy, setPdfBusy] = useState("");
 
   /* ---------- Fetch Farmer ---------- */
 
@@ -321,6 +352,28 @@ export default function FarmerDetails() {
 
     return () => controller.abort();
   }, [fetchDetails]);
+
+  const fetchAdvanceHistory = useCallback(async () => {
+    if (!farmerId) return;
+
+    try {
+      const res = await axios.get(`${API}/farmer/advance/${farmerId}/ledger`, {
+        withCredentials: true,
+      });
+
+      setAdvanceHistory({
+        summary: res.data?.summary || null,
+        lots: res.data?.lots || [],
+      });
+    } catch {
+      // Advance detail optional hai, page ko na tode
+      setAdvanceHistory(null);
+    }
+  }, [farmerId]);
+
+  useEffect(() => {
+    fetchAdvanceHistory();
+  }, [fetchAdvanceHistory]);
 
   /* ---------- Farmer Summary ---------- */
 
@@ -495,6 +548,196 @@ export default function FarmerDetails() {
     );
   }, [filteredWorks]);
 
+  /* ---------- Ledger check / repair + restore ---------- */
+
+  const REPAIR_URL = `${API}/farmer/${farmerId}/advance-reconciliation/repair`;
+
+  // Step 1: bina apply ke sirf plan mangta hai (kuch badalta nahi)
+  const checkLedger = async () => {
+    setLedger({ open: true, loading: true, applying: false, data: null });
+
+    try {
+      const res = await axios.post(REPAIR_URL, {}, { withCredentials: true });
+      setLedger({ open: true, loading: false, applying: false, data: res.data });
+    } catch (error) {
+      setLedger({ open: false, loading: false, applying: false, data: null });
+      toast.error(
+        error.response?.data?.message || "Could not check advance ledger"
+      );
+    }
+  };
+
+  // Step 2: owner confirm kare to asli fix
+  const applyLedgerRepair = async () => {
+    setLedger((prev) => ({ ...prev, applying: true }));
+
+    try {
+      const res = await axios.post(
+        REPAIR_URL,
+        { apply: true },
+        { withCredentials: true }
+      );
+
+      toast.success(res.data?.message || "Ledger repaired");
+      setLedger({ open: false, loading: false, applying: false, data: null });
+      fetchDetails();
+      fetchAdvanceHistory();
+    } catch (error) {
+      setLedger((prev) => ({ ...prev, applying: false }));
+      toast.error(
+        error.response?.data?.message || "Ledger repair failed"
+      );
+    }
+  };
+
+  const closeLedger = () => {
+    if (ledger.applying) return;
+    setLedger({ open: false, loading: false, applying: false, data: null });
+  };
+
+  const handleRestore = async () => {
+    try {
+      setRestoring(true);
+      await axios.post(
+        `${API}/farmer/restore/${farmerId}`,
+        {},
+        { withCredentials: true }
+      );
+      toast.success("Farmer restored");
+      fetchDetails();
+    } catch (error) {
+      toast.error(
+        error.response?.data?.message || "Could not restore farmer"
+      );
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  /* ---------- Statement PDF: download / share / send ---------- */
+
+  const whatsAppNumber = toWhatsAppNumber(farmer?.phone);
+  const canNativeShare =
+    typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  // Is farmer ke saare SUCCESS payments (100-100 ke pages me)
+  const fetchFarmerPayments = async () => {
+    const all = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const res = await axios.get(`${API}/payment/records`, {
+        params: { farmerID: farmerId, status: "SUCCESS", page, limit: 100 },
+        withCredentials: true,
+      });
+
+      all.push(...(res.data?.payments || []));
+      totalPages = res.data?.pagination?.totalPages || 1;
+      page += 1;
+    } while (page <= totalPages && page <= 20);
+
+    return all;
+  };
+
+  const buildStatement = async () => {
+    const payments = await fetchFarmerPayments();
+
+    return buildFarmerStatementPdf({
+      farmer,
+      works,
+      payments,
+      generatedBy: user?.name || "",
+      advanceSummary: advanceHistory?.summary || null,
+    });
+  };
+
+  const statementMessage = () =>
+    [
+      `Namaste ${farmer?.name || ""} ji,`,
+      `${user?.name ? `${user.name} ki taraf se ` : ""}aapka hisaab:`,
+      `• Kul kaam: ${formatCurrency(billedAmount)}`,
+      `• Jama (paid): ${formatCurrency(settledAmount)}`,
+      `• Baaki (due): ${formatCurrency(dueAmount)}`,
+      `• Advance: ${formatCurrency(advanceAmount)}`,
+      "Poora statement PDF me hai. Dhanyavaad.",
+    ].join("\n");
+
+  const runPdfAction = async (kind, action) => {
+    if (pdfBusy) return;
+
+    try {
+      setPdfBusy(kind);
+      await action();
+    } catch (error) {
+      if (error?.name === "AbortError") return; // share sheet band kar di
+      console.error("Statement PDF error:", error);
+      toast.error(
+        error.response?.data?.message || "Could not create the PDF"
+      );
+    } finally {
+      setPdfBusy("");
+    }
+  };
+
+  const downloadStatement = () =>
+    runPdfAction("download", async () => {
+      const { blob, fileName } = await buildStatement();
+      downloadBlob(blob, fileName);
+      toast.success("PDF download ho gaya");
+    });
+
+  // Phone ki share sheet: yahin se kisi bhi app / contact ko bhej sakte ho
+  const shareStatement = () =>
+    runPdfAction("share", async () => {
+      const { blob, fileName } = await buildStatement();
+      const file = new File([blob], fileName, { type: "application/pdf" });
+
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `${farmer?.name || "Farmer"} statement`,
+          text: statementMessage(),
+        });
+        return;
+      }
+
+      downloadBlob(blob, fileName);
+      toast("Share is device par support nahi, PDF download kar diya.");
+    });
+
+  // Farmer ko bhejo: share sheet (mobile) ya PDF download + us farmer ki WhatsApp chat
+  const sendToFarmer = () =>
+    runPdfAction("send", async () => {
+      const { blob, fileName } = await buildStatement();
+      const file = new File([blob], fileName, { type: "application/pdf" });
+      const text = statementMessage();
+
+      if (canNativeShare && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: `${farmer?.name || "Farmer"} statement`,
+            text,
+          });
+          return;
+        } catch (error) {
+          if (error?.name === "AbortError") return;
+          // NotAllowedError etc: neeche wale tareeke par chale jao
+        }
+      }
+
+      downloadBlob(blob, fileName);
+
+      const url = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(text)}`;
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) window.location.href = url;
+
+      toast.success(
+        "PDF download ho gaya. WhatsApp chat khul gayi hai, PDF attach karke bhej do."
+      );
+    });
+
   /* ---------- Payment Navigation ---------- */
 
   const handlePayClick = (work) => {
@@ -647,20 +890,93 @@ export default function FarmerDetails() {
               </div>
             </div>
 
-            {dueAmount > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={handleRecordPayment}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-emerald-800 shadow-xl shadow-black/20 transition hover:bg-emerald-50 active:scale-[0.98]"
+                type="button"
+                onClick={downloadStatement}
+                disabled={Boolean(pdfBusy)}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-3 text-sm font-bold text-white ring-1 ring-white/25 backdrop-blur transition hover:bg-white/20 disabled:opacity-60"
               >
-                <CreditCard size={17} />
-                Record Payment
+                {pdfBusy === "download" ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <FileDown size={16} />
+                )}
+                {pdfBusy === "download" ? "Preparing..." : "PDF"}
               </button>
-            )}
+
+              {canNativeShare && (
+                <button
+                  type="button"
+                  onClick={shareStatement}
+                  disabled={Boolean(pdfBusy)}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-3 text-sm font-bold text-white ring-1 ring-white/25 backdrop-blur transition hover:bg-white/20 disabled:opacity-60"
+                >
+                  {pdfBusy === "share" ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Share2 size={16} />
+                  )}
+                  Share
+                </button>
+              )}
+
+              {whatsAppNumber && (
+                <button
+                  type="button"
+                  onClick={sendToFarmer}
+                  disabled={Boolean(pdfBusy)}
+                  title={`Send statement to ${farmer.phone}`}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-extrabold text-emerald-950 shadow-lg shadow-black/20 transition hover:bg-emerald-300 disabled:opacity-60"
+                >
+                  {pdfBusy === "send" ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Send size={16} />
+                  )}
+                  {pdfBusy === "send" ? "Preparing..." : "Send to farmer"}
+                </button>
+              )}
+
+              {dueAmount > 0 && (
+                <button
+                  onClick={handleRecordPayment}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-emerald-800 shadow-xl shadow-black/20 transition hover:bg-emerald-50 active:scale-[0.98]"
+                >
+                  <CreditCard size={17} />
+                  Record Payment
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </section>
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        {farmer.isArchived && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-amber-50 p-4 ring-1 ring-amber-200">
+            <p className="text-sm font-semibold text-amber-900">
+              This farmer is archived. New work cannot be added until restored.
+            </p>
+
+            {isOwner && (
+              <button
+                type="button"
+                onClick={handleRestore}
+                disabled={restoring}
+                className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-amber-600 disabled:opacity-60"
+              >
+                {restoring ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <ArchiveRestore size={15} />
+                )}
+                Restore farmer
+              </button>
+            )}
+          </div>
+        )}
+
         {/* STAT STRIP */}
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 lg:gap-4">
@@ -1197,9 +1513,69 @@ export default function FarmerDetails() {
 
               <p className="mt-1 text-xs text-amber-50/90">
                 {advanceAmount > 0
-                  ? "Credit available for upcoming work"
-                  : "No advance currently available"}
+                  ? "Bacha hua — aage ke kaam me adjust hoga"
+                  : "Abhi koi advance bacha nahi hai"}
               </p>
+
+              {advanceHistory?.summary && (
+                <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                  {[
+                    ["Diya", advanceHistory.summary.totalReceived],
+                    ["Use hua", advanceHistory.summary.totalUsed],
+                    ["Bacha", advanceHistory.summary.balance],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl bg-white/20 px-2 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-50">
+                        {label}
+                      </p>
+                      <p className="mt-0.5 text-sm font-extrabold tabular-nums">
+                        {formatCurrency(value)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {advanceHistory?.lots?.length > 0 && (
+                <div className="mt-3">
+                  <ul className="space-y-1.5">
+                    {(showAllLots ? advanceHistory.lots : advanceHistory.lots.slice(0, 3)).map(
+                      (lot) => (
+                        <li
+                          key={lot._id}
+                          className="rounded-xl bg-white/15 px-3 py-2 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold">
+                              {formatDate(lot.date)}
+                              {lot.sourceType === "OPENING" ? " · Opening" : ""}
+                            </span>
+                            <span className="font-extrabold tabular-nums">
+                              {formatCurrency(lot.given)}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex justify-between text-[11px] text-amber-50/90">
+                            <span>Use {formatCurrency(lot.used)}</span>
+                            <span>Bacha {formatCurrency(lot.remaining)}</span>
+                          </div>
+                        </li>
+                      )
+                    )}
+                  </ul>
+
+                  {advanceHistory.lots.length > 3 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllLots((v) => !v)}
+                      className="mt-2 w-full text-center text-[11px] font-bold text-white/90 underline-offset-2 hover:underline"
+                    >
+                      {showAllLots
+                        ? "Kam dikhao"
+                        : `Saare ${advanceHistory.lots.length} jama dikhao`}
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="mt-4 border-t border-white/20 pt-3">
                 <div className="flex items-center justify-between gap-3 text-xs text-amber-50">
@@ -1210,6 +1586,17 @@ export default function FarmerDetails() {
                   </span>
                 </div>
               </div>
+
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={checkLedger}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-white/20 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-white/30"
+                >
+                  <Wrench size={14} />
+                  Check / fix advance ledger
+                </button>
+              )}
             </div>
 
             {/* CONTACT + NOTES */}
@@ -1262,6 +1649,112 @@ export default function FarmerDetails() {
           </aside>
         </div>
       </div>
+
+      {/* LEDGER CHECK / REPAIR MODAL */}
+
+      {ledger.open && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeLedger();
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Advance ledger check
+              </h3>
+
+              <button
+                type="button"
+                onClick={closeLedger}
+                disabled={ledger.applying}
+                aria-label="Close"
+                className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 disabled:opacity-40"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {ledger.loading || !ledger.data ? (
+              <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+                <Loader2 size={18} className="animate-spin" />
+                Checking ledger...
+              </div>
+            ) : ledger.data.inSync ? (
+              <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-800">
+                <p className="flex items-center gap-2 font-bold">
+                  <CheckCircle2 size={16} />
+                  Ledger is in sync
+                </p>
+                <p className="mt-1 text-xs">
+                  Farmer balance {formatCurrency(ledger.data.farmerBalance)} aur
+                  advance lots barabar hain. Kuch fix karne ki zaroorat nahi.
+                </p>
+              </div>
+            ) : (
+              <>
+                <dl className="mt-4 space-y-2 rounded-2xl bg-slate-50 p-4 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-500">Farmer advance balance</dt>
+                    <dd className="font-bold tabular-nums text-slate-900">
+                      {formatCurrency(ledger.data.farmerBalance)}
+                    </dd>
+                  </div>
+
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-500">Advance lots total</dt>
+                    <dd className="font-bold tabular-nums text-slate-900">
+                      {formatCurrency(ledger.data.lotsBalance)}
+                    </dd>
+                  </div>
+
+                  <div className="flex justify-between gap-3 border-t border-slate-200 pt-2">
+                    <dt className="text-slate-500">Difference</dt>
+                    <dd className="font-bold tabular-nums text-rose-600">
+                      {formatCurrency(Math.abs(ledger.data.difference || 0))}
+                    </dd>
+                  </div>
+                </dl>
+
+                <p className="mt-3 rounded-2xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900 ring-1 ring-amber-200">
+                  {ledger.data.plan?.action === "CREATE_OPENING_LOT"
+                    ? `Fix: ${formatCurrency(ledger.data.plan.amount)} ka opening lot banega, taaki lots farmer balance ke barabar ho jayein.`
+                    : `Fix: sabse naye lots se ${formatCurrency(ledger.data.plan?.amount)} ghataya jayega, taaki lots farmer balance ke barabar ho jayein.`}{" "}
+                  Farmer ka balance nahi badlega.
+                </p>
+
+                <div className="mt-5 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={closeLedger}
+                    disabled={ledger.applying}
+                    className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={applyLedgerRepair}
+                    disabled={ledger.applying}
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {ledger.applying && (
+                      <Loader2 size={15} className="animate-spin" />
+                    )}
+                    {ledger.applying ? "Fixing..." : "Fix now"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

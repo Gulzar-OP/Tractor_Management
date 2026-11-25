@@ -53,9 +53,10 @@ export const addDriver = async (req, res) => {
     });
 
   } catch (err) {
+    console.error(err);
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
@@ -66,6 +67,7 @@ export const getAllDrivers = async (req, res) => {
     const drivers = await User.find({
       role: "driver",
       owner: req.ownerId,
+      isActive: { $ne: false },
     }).select("-password");
 
     res.status(200).json({
@@ -74,9 +76,10 @@ export const getAllDrivers = async (req, res) => {
     });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
@@ -103,9 +106,10 @@ export const getDriverById = async (req, res) => {
     });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
@@ -113,13 +117,68 @@ export const getDriverById = async (req, res) => {
 // ================= UPDATE DRIVER =================
 export const updateDriver = async (req, res) => {
   try {
+    // Mass assignment se bachne ke liye sirf ye fields allow hain.
+    // role / owner / email kabhi body se nahi badlenge.
+    const allowed = ["name", "phone", "village", "isActive"];
+    const updates = {};
+
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        updates[key] = req.body[key];
+      }
+    }
+
+    if (typeof updates.name === "string") {
+      updates.name = updates.name.trim();
+      if (!updates.name) {
+        return res.status(400).json({
+          success: false,
+          message: "Name cannot be empty",
+        });
+      }
+    }
+
+    if (
+      updates.isActive !== undefined &&
+      typeof updates.isActive !== "boolean"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "isActive must be true or false",
+      });
+    }
+
+    if (req.body.password !== undefined) {
+      const password = req.body.password;
+
+      if (
+        typeof password !== "string" ||
+        password.length < 8 ||
+        password.length > 72
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Password must be 8-72 characters",
+        });
+      }
+
+      updates.password = await bcrypt.hash(password, 10);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid fields to update",
+      });
+    }
+
     const driver = await User.findOneAndUpdate(
       {
         _id: req.params.id,
         role: "driver",
         owner: req.ownerId,
       },
-      req.body,
+      { $set: updates },
       {
         new: true,
         runValidators: true,
@@ -138,11 +197,11 @@ export const updateDriver = async (req, res) => {
       message: "Driver updated",
       driver,
     });
-
   } catch (err) {
+    console.error("updateDriver error:", err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
@@ -157,11 +216,17 @@ export const deleteDriver = async (req, res) => {
       });
     }
 
-    const driver = await User.findOneAndDelete({
-      _id: req.params.id,
-      role: "driver",
-      owner: req.ownerId,
-    });
+    // Soft delete: driver ke purane works/payments ka createdBy
+    // valid rehta hai, bas wo login nahi kar paayega.
+    const driver = await User.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        role: "driver",
+        owner: req.ownerId,
+      },
+      { $set: { isActive: false } },
+      { new: true }
+    );
 
     if (!driver) {
       return res.status(404).json({
@@ -176,9 +241,10 @@ export const deleteDriver = async (req, res) => {
     });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
@@ -200,17 +266,22 @@ export const me = async (req, res) => {
     });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Server error",
     });
   }
 };
 
-// find driver
+// find driver (scoped: sirf apne owner ka driver)
 export const getDriver = async (req, res) => {
   try {
-    const driver = await User.findById(req.params._id).select("-password");
+    const driver = await User.findOne({
+      _id: req.params._id,
+      role: "driver",
+      owner: req.ownerId,
+    }).select("-password");
 
     if (!driver) {
       return res.status(404).json({

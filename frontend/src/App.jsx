@@ -27,6 +27,10 @@ import Intro from './Home/Intro'
 import DateWiseReport from "./features/Reports/DateWiseReport";
 import Works from "./features/Works/Works";
 import PaymentRecords from "./features/Payment/PaymentRecords";
+import Changelog from "./page/Changelog/Changelog";
+import ManageAnnouncements from "./page/Changelog/ManageAnnouncements";
+import ProtectedRoute from "./components/ProtectedRoute.jsx"
+import HelpCenter from "./features/HelpCenter/HelpCenter";
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -73,6 +77,28 @@ export default function App() {
                   {/* <Route path="/reports" element={<Reports />} /> */}
                   <Route path="/reports" element={<DateWiseReport />} />
                   <Route path="/settings" element={<Settings />} />
+                  <Route
+                    path="/manage-updates"
+                    element={
+                      <ProtectedRoute allowedRoles={["owner", "admin"]}>
+                        <ManageAnnouncements />
+                      </ProtectedRoute>
+                    }
+                  />
+
+                  <Route
+                    path="/changelog"
+                    element={
+                      <ProtectedRoute allowedRoles={["owner", "admin", "driver"]}>
+                        <Changelog />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route path="/help" element={<HelpCenter />} />
+                  {/* <Route
+  path="/help"
+  element={<HelpCenter role={user?.role} />} */}
+{/* /> */}
                 </Routes>
               </main>
             </div>

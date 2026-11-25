@@ -13,7 +13,7 @@ import driverRoutes from "./routes/driver.routes.js"
 import rateRoutes from './routes/workRate.routes.js'
 import reportRoutes from './routes/report.routes.js'
 import tractorRoutes from './routes/tractor.routes.js'
-
+import announcementRoutes from "./routes/announcement.routes.js";
 dotenv.config();
 const app = express();
 
@@ -53,6 +53,7 @@ app.use("/api/driver",driverRoutes)
 app.use("/api/rate",rateRoutes)
 app.use("/api/report", reportRoutes);
 app.use("/api/tractor", tractorRoutes);
+app.use("/api/announcements", announcementRoutes);
 
 // Database 
 connectDB();

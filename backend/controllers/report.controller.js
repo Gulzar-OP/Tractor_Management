@@ -76,12 +76,9 @@ export const dateWiseReport = async (req, res) => {
     const workFilter = {
       owner: req.user.ownerId,
       date: { $gte: start, $lt: end },
-      status: { $ne: "CANCELLED" },
     };
+    if (!isOwner) workFilter.createdBy = req.user.userId;
 
-    if (!isOwner) {
-      workFilter.createdBy = req.user.userId;
-    }
     const [works, expenses] = await Promise.all([
       WorkLog.find(workFilter)
         .populate("farmer", "name phone village")
@@ -137,6 +134,9 @@ export const dateWiseReport = async (req, res) => {
         paidAmount: w.paidAmount || 0,
         dueAmount: w.dueAmount || 0,
       });
+
+      // CANCELLED work list me dikhega, par totals me nahi ginega
+      if (w.status === "CANCELLED") continue;
 
       day.totals.works += 1;
       day.totals.minutes += w.totalMinutes || 0;

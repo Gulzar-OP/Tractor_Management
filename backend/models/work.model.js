@@ -27,10 +27,11 @@ const workSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Optional: startWork me manual hourlyRate se bhi kaam shuru ho sakta hai
     workRate: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "WorkRate",
-      required: true,
+      default: null,
     },
 
     workType: {

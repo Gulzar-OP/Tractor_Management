@@ -100,6 +100,8 @@ export default function PaymentPage() {
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [note, setNote] = useState("");
+  // Advance tab: pehle purana due chukao, bacha hua advance me jaaye
+  const [clearOldDueFirst, setClearOldDueFirst] = useState(true);
 
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
@@ -240,7 +242,15 @@ export default function PaymentPage() {
   const remainingDue = Math.max(dueAmount - appliedAmount, 0);
   const isOverpayment = Boolean(selectedWork) && amountReady && numericAmount > dueAmount;
   const estimatedAdvance = existingAdvance + newAdvance;
-  const estimatedIndependentAdvance = existingAdvance + numericAmount;
+
+  // Advance tab preview (estimate: farmer ka total due use hota hai,
+  // asli allocation backend sirf STOPPED works par karta hai)
+  const useDueFirst = isAdvance && clearOldDueFirst && farmerTotalDue > 0;
+  const advanceDueCleared = useDueFirst
+    ? Math.min(Math.max(numericAmount, 0), farmerTotalDue)
+    : 0;
+  const advanceCredited = Math.max(numericAmount - advanceDueCleared, 0);
+  const estimatedAdvanceAfterReceive = existingAdvance + advanceCredited;
 
   /* ---------------- validation ---------------- */
 
@@ -267,6 +277,7 @@ export default function PaymentPage() {
     setWorkId("");
     setAmount("");
     setNote("");
+    setClearOldDueFirst(true);
   };
 
   const handleRefresh = async () => {
@@ -304,6 +315,7 @@ export default function PaymentPage() {
             amount: numericAmount,
             paymentMethod,
             note: note.trim(),
+            clearOldDueFirst: useDueFirst,
           },
           { withCredentials: true }
         );
@@ -313,7 +325,11 @@ export default function PaymentPage() {
           return;
         }
 
-        showToast("success", `${formatCurrency(numericAmount)} advance received successfully`);
+        showToast(
+          "success",
+          res.data?.message ||
+            `${formatCurrency(numericAmount)} advance received successfully`
+        );
         setAmount("");
         setNote("");
         await fetchFarmers();
@@ -640,6 +656,30 @@ export default function PaymentPage() {
             </div>
           </div>
 
+          {/* Purana due pehle (sirf Advance tab, jab farmer par due ho) */}
+          {isAdvance && selectedFarmer && farmerTotalDue > 0 && (
+            <label
+              htmlFor="clearOldDue"
+              className="flex cursor-pointer items-start gap-3 rounded-2xl bg-amber-50 p-4 ring-1 ring-amber-200"
+            >
+              <input
+                id="clearOldDue"
+                type="checkbox"
+                checked={clearOldDueFirst}
+                onChange={(e) => setClearOldDueFirst(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-amber-600"
+              />
+              <span className="text-xs leading-relaxed text-amber-900">
+                <span className="block text-sm font-extrabold">
+                  Pehle purana due clear karo
+                </span>
+                Is farmer par {formatCurrency(farmerTotalDue)} due hai. Ye paisa
+                pehle purane kaam ke due (purana pehle) me lagega, bacha hua hi
+                advance banega. Sirf advance rakhna ho to tick hata do.
+              </span>
+            </label>
+          )}
+
           {/* Method */}
           <div>
             <span className={labelCls}>Payment method</span>
@@ -766,19 +806,30 @@ export default function PaymentPage() {
 
               <div className="mt-4 space-y-2.5 text-sm">
                 <PreviewRow label="Existing advance" value={formatCurrency(existingAdvance)} />
-                <PreviewRow label="New advance received" value={`+ ${formatCurrency(numericAmount)}`} />
+                <PreviewRow label="Total received" value={formatCurrency(numericAmount)} />
+                {advanceDueCleared > 0 && (
+                  <PreviewRow
+                    label="Purana due clear"
+                    value={`- ${formatCurrency(advanceDueCleared)}`}
+                  />
+                )}
+                <PreviewRow
+                  label="New advance"
+                  value={`+ ${formatCurrency(advanceCredited)}`}
+                />
                 <div className="border-t border-white/30 pt-3">
                   <PreviewRow
                     label="Estimated balance"
-                    value={formatCurrency(estimatedIndependentAdvance)}
+                    value={formatCurrency(estimatedAdvanceAfterReceive)}
                     bold
                   />
                 </div>
               </div>
 
               <p className="mt-4 rounded-xl bg-white/20 p-3 text-xs leading-relaxed">
-                Saved as an independent advance. No work is paid in this transaction;
-                future completed work can consume this balance automatically.
+                {advanceDueCleared > 0
+                  ? "Pehle purane works ka due chukega (purana pehle), bacha hua paisa advance me jayega. Ye estimate hai, asli hisaab backend karta hai."
+                  : "Saved as an independent advance. No work is paid in this transaction; future completed work can consume this balance automatically."}
               </p>
             </div>
           )}

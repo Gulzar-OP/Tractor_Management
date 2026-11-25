@@ -12,7 +12,7 @@ import {
   cancelWork,
 } from "../controllers/work.controller.js";
 
-import { protect } from "../middleware/auth.middleware.js";
+import { protect, isOwner } from "../middleware/auth.middleware.js";
 import { dueSummary } from "../controllers/dueSummary.controller.js";
 
 const router = express.Router();
@@ -26,11 +26,8 @@ router.get("/details/:id", protect, workDetails);
 router.post("/:id/pause", protect, pauseWork);
 router.post("/:id/resume", protect, resumeWork);
 router.post("/:id/stop", protect, stopWork);
-router.delete(
-  "/:id",
-  protect,
-  deleteWork
-);
+// Work delete sirf owner kar sakta hai (driver sirf cancel kar sakta hai)
+router.delete("/:id", protect, isOwner, deleteWork);
 router.put("/:id", protect, updateWork);
 router.post("/:id/cancel", protect, cancelWork);
 
