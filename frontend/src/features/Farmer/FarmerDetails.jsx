@@ -706,7 +706,9 @@ export default function FarmerDetails() {
       toast("Share is device par support nahi, PDF download kar diya.");
     });
 
-  // Farmer ko bhejo: share sheet (mobile) ya PDF download + us farmer ki WhatsApp chat
+  // Farmer ko bhejo.
+  // Mobile: share sheet me sirf PDF file (text ke saath kai phones par file drop ho jati hai),
+  // message clipboard me copy ho jata hai. Desktop: PDF download + WhatsApp chat, PDF haath se attach.
   const sendToFarmer = () =>
     runPdfAction("send", async () => {
       const { blob, fileName } = await buildStatement();
@@ -715,11 +717,17 @@ export default function FarmerDetails() {
 
       if (canNativeShare && navigator.canShare?.({ files: [file] })) {
         try {
+          await navigator.clipboard?.writeText(text);
+        } catch {
+          // clipboard optional
+        }
+
+        try {
           await navigator.share({
             files: [file],
             title: `${farmer?.name || "Farmer"} statement`,
-            text,
           });
+          toast.success("Message bhi copy hai, chat me paste kar sakte ho.");
           return;
         } catch (error) {
           if (error?.name === "AbortError") return;
@@ -733,8 +741,9 @@ export default function FarmerDetails() {
       const opened = window.open(url, "_blank", "noopener,noreferrer");
       if (!opened) window.location.href = url;
 
-      toast.success(
-        "PDF download ho gaya. WhatsApp chat khul gayi hai, PDF attach karke bhej do."
+      toast(
+        `"${fileName}" download ho gayi. WhatsApp chat me clip (📎) → Document se us PDF ko attach karke bhejo.`,
+        { duration: 9000 }
       );
     });
 
