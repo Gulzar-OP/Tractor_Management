@@ -165,6 +165,44 @@ export default function Dashboard() {
       .map(({ month, income, key }) => ({ month, income, key }));
   }, [works]);
 
+  // Daily income: pichhle 30 din, jis din kaam nahi hua wo 0 ke saath (chart me gap na aaye)
+  const dailyIncomeData = useMemo(() => {
+    const byDay = {};
+
+    works.forEach((work) => {
+      if (!work.date || isCancelled(work)) return;
+      const date = new Date(work.date);
+      if (Number.isNaN(date.getTime())) return;
+
+      const key = dayKey(date);
+      byDay[key] = (byDay[key] || 0) + (work.totalAmount || 0);
+    });
+
+    const result = [];
+    const cursor = new Date();
+    cursor.setHours(12, 0, 0, 0); // DST / midnight edge se bachne ke liye dopahar
+
+    for (let i = 29; i >= 0; i -= 1) {
+      const d = new Date(cursor);
+      d.setDate(cursor.getDate() - i);
+      const key = dayKey(d);
+
+      result.push({
+        key,
+        month: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+        fullLabel: d.toLocaleDateString("en-IN", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        }),
+        income: byDay[key] || 0,
+      });
+    }
+
+    return result;
+  }, [works]);
+
   // The actual current month — not just "the latest month that has data"
   const currentMonthIncome = useMemo(() => {
     const key = monthKey(new Date());
@@ -389,7 +427,7 @@ export default function Dashboard() {
       {/* Charts */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="xl:col-span-2">
-          <MonthlyChart data={monthlyIncomeData} inr={inr} />
+          <MonthlyChart data={monthlyIncomeData} dailyData={dailyIncomeData} inr={inr} />
         </div>
         <div>
           <ExpensePie data={expenseBreakdown} inr={inr} />
