@@ -149,16 +149,6 @@ const STATUS_STYLES = {
   },
 };
 
-/* ------------------------------------------------------------------ */
-/* Hindi / Devanagari → English transliteration                        */
-/* ------------------------------------------------------------------ */
-
-// Hindi transcript ko English phonetic form mein convert karta hai.
-// Example: गुलजार -> gulzaar, रमेश -> rameesh/ram... variants
-
-/* ------------------------------------------------------------------ */
-/* Hindi / Devanagari → English transliteration                        */
-/* ------------------------------------------------------------------ */
 
 const DEVANAGARI_MAP = {
   // Vowels

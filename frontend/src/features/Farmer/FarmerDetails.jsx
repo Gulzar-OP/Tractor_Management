@@ -654,7 +654,7 @@ export default function FarmerDetails() {
 
   const statementMessage = () =>
     [
-      `Namaste ${farmer?.name || ""} ji,`,
+      `Assalamu Alaikum ${farmer?.name || ""} sahab,`,
       `${user?.name ? `${user.name} ki taraf se ` : ""}aapka hisaab:`,
       `• Kul kaam: ${formatCurrency(billedAmount)}`,
       `• Jama (paid): ${formatCurrency(settledAmount)}`,
