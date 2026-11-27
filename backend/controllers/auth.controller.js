@@ -1,6 +1,6 @@
 import User from "../models/user.model.js";
 import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
+import { signAuthToken, SESSION_MAX_AGE_MS } from "../utils/authToken.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -39,11 +39,14 @@ export const register = async (req, res) => {
       email,
       password: hashedPassword,
       role: "owner",
+      approvalStatus: "pending", // admin approve karega tab login hoga
     });
 
     return res.status(201).json({
       success: true,
-      message: "Registration successful",
+      pendingApproval: true,
+      message:
+        "Registration ho gayi. Admin approval ke baad aap login kar payenge.",
       user: { _id: user._id, name: user.name, email: user.email, role: user.role },
     });
   } catch (err) {
@@ -93,20 +96,37 @@ export const login = async (req, res) => {
       });
     }
 
-    const token = jwt.sign(
-      {
-        userId: user._id,
-        role: user.role,
-        ownerId: user.role === "owner" ? user._id : user.owner,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    // Password sahi hone ke BAAD hi approval ka status batate hain
+    // (taaki bina password ke koi email ka status na jaan sake)
+    if (user.approvalStatus === "pending") {
+      return res.status(403).json({
+        success: false,
+        code: "PENDING_APPROVAL",
+        message:
+          "Aapka account abhi admin ki approval ka intezaar kar raha hai. Approve hone ke baad login kar payenge.",
+      });
+    }
+
+    if (user.approvalStatus === "rejected") {
+      return res.status(403).json({
+        success: false,
+        code: "REJECTED",
+        message: user.rejectionReason
+          ? `Aapki registration approve nahi hui: ${user.rejectionReason}`
+          : "Aapki registration approve nahi hui. Admin se sampark karo.",
+      });
+    }
+
+    const token = signAuthToken({
+      userId: user._id,
+      role: user.role,
+      ownerId: user.role === "owner" ? user._id : user.owner,
+    });
 
     return res
       .cookie("authToken", token, {
         ...cookieOptions,
-        maxAge: 7 * 24 * 60 * 60 * 1000,
+        maxAge: SESSION_MAX_AGE_MS,
       })
       .json({
         success: true,

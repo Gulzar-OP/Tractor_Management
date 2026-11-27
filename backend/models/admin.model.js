@@ -8,7 +8,16 @@ const adminAuditSchema = new mongoose.Schema(
     adminName: { type: String, default: "" },
     action: {
       type: String,
-      enum: ["UPDATE", "ENABLE", "DISABLE", "RESET_PASSWORD", "EXPORT", "DELETE"],
+      enum: [
+        "UPDATE",
+        "ENABLE",
+        "DISABLE",
+        "RESET_PASSWORD",
+        "EXPORT",
+        "DELETE",
+        "APPROVE",
+        "REJECT",
+      ],
       required: true,
     },
     targetOwner: { type: mongoose.Schema.Types.ObjectId, required: true },

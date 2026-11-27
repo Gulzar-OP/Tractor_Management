@@ -59,11 +59,18 @@ export const protect = async (req, res, next) => {
     // Token ke bharose mat raho: user abhi bhi exist karta hai,
     // active hai, aur role/owner DB ke hisaab se kya hai.
     const user = await User.findById(userId)
-      .select("role owner isActive")
+      .select("role owner isActive approvalStatus")
       .lean();
 
     if (!user || user.isActive === false) {
       return unauthorized(res, "Account not found or disabled");
+    }
+
+    if (
+      user.approvalStatus === "pending" ||
+      user.approvalStatus === "rejected"
+    ) {
+      return unauthorized(res, "Account approval pending");
     }
 
     // Admin kisi owner ke under nahi hota: sirf /api/admin routes chalta hai
@@ -91,10 +98,15 @@ export const protect = async (req, res, next) => {
     // Driver ka owner delete/disable ho gaya ho to driver bhi band
     if (user.role === "driver") {
       const owner = await User.findById(ownerId)
-        .select("isActive")
+        .select("isActive approvalStatus")
         .lean();
 
-      if (!owner || owner.isActive === false) {
+      if (
+        !owner ||
+        owner.isActive === false ||
+        owner.approvalStatus === "pending" ||
+        owner.approvalStatus === "rejected"
+      ) {
         return unauthorized(res, "Owner account not available");
       }
     }

@@ -25,6 +25,8 @@ import {
   MapPin,
   Mail,
   Download,
+  Check,
+  Clock,
 } from "lucide-react";
 
 import { buildOwnerExportPdf } from "../utils/ownerExport.js";
@@ -82,6 +84,8 @@ const ACTION_LABEL = {
   RESET_PASSWORD: { text: "Password reset", cls: "bg-violet-100 text-violet-700" },
   EXPORT: { text: "Exported", cls: "bg-indigo-100 text-indigo-700" },
   DELETE: { text: "Deleted", cls: "bg-rose-100 text-rose-700" },
+  APPROVE: { text: "Approved", cls: "bg-emerald-100 text-emerald-700" },
+  REJECT: { text: "Rejected", cls: "bg-rose-100 text-rose-700" },
 };
 
 const saveBlob = (blob, fileName) => {
@@ -219,6 +223,20 @@ export default function AdminOwners() {
     fetchLogs();
   };
 
+  const approveOwner = async (owner) => {
+    try {
+      await axios.patch(
+        `${API}/owners/${owner._id}/approval`,
+        { decision: "approve" },
+        { withCredentials: true }
+      );
+      toast.success(`${owner.name} approve ho gaya. Ab wo login kar sakta hai.`);
+      refreshAll();
+    } catch (error) {
+      toast.error(errMsg(error, "Could not approve owner"));
+    }
+  };
+
   const toggleStatus = async (owner) => {
     const next = !owner.isActive;
 
@@ -292,7 +310,13 @@ export default function AdminOwners() {
             icon={ShieldCheck}
             label="Owners"
             value={stats ? stats.owners.total : "-"}
-            sub={stats ? `${stats.owners.active} active · ${stats.owners.disabled} disabled` : ""}
+            sub={
+              stats
+                ? `${stats.owners.active} active · ${stats.owners.disabled} disabled${
+                    stats.owners.pending ? ` · ${stats.owners.pending} pending` : ""
+                  }`
+                : ""
+            }
             tone="violet"
           />
           <StatTile
@@ -324,6 +348,25 @@ export default function AdminOwners() {
           </div>
         )}
 
+        {stats?.owners?.pending > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-amber-50 p-4 ring-1 ring-amber-200">
+            <p className="flex items-center gap-2 text-sm font-bold text-amber-900">
+              <Clock size={16} />
+              {stats.owners.pending} naye owner approval ka intezaar kar rahe hain
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setStatus("pending");
+                setPage(1);
+              }}
+              className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-white transition hover:bg-amber-600"
+            >
+              Dekho
+            </button>
+          </div>
+        )}
+
         {/* Filters */}
         <div className="flex flex-col gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-stone-900/5 sm:flex-row sm:items-center">
           <div className="relative flex-1">
@@ -342,8 +385,10 @@ export default function AdminOwners() {
           <div className="flex rounded-xl bg-stone-100 p-1">
             {[
               ["all", "All"],
+              ["pending", `Pending${stats?.owners?.pending ? ` (${stats.owners.pending})` : ""}`],
               ["active", "Active"],
               ["disabled", "Disabled"],
+              ["rejected", "Rejected"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -352,7 +397,7 @@ export default function AdminOwners() {
                   setStatus(id);
                   setPage(1);
                 }}
-                className={`rounded-lg px-4 py-1.5 text-xs font-bold transition ${
+                className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
                   status === id
                     ? "bg-white text-violet-700 shadow-sm"
                     : "text-stone-500 hover:text-stone-700"
@@ -398,6 +443,8 @@ export default function AdminOwners() {
                   onEdit={() => setModal({ type: "edit", owner })}
                   onPassword={() => setModal({ type: "password", owner })}
                   onToggle={() => toggleStatus(owner)}
+                  onApprove={() => approveOwner(owner)}
+                  onReject={() => setModal({ type: "reject", owner })}
                   onDelete={() => setModal({ type: "delete", owner })}
                   onExport={() => exportOwner(owner)}
                 />
@@ -505,6 +552,17 @@ export default function AdminOwners() {
         />
       )}
 
+      {modal?.type === "reject" && (
+        <RejectOwnerModal
+          owner={modal.owner}
+          onClose={closeModal}
+          onDone={() => {
+            closeModal();
+            refreshAll();
+          }}
+        />
+      )}
+
       {modal?.type === "delete" && (
         <DeleteOwnerModal
           owner={modal.owner}
@@ -558,15 +616,30 @@ function MoneyTile({ label, value, cls }) {
   );
 }
 
-function OwnerRow({ owner, onView, onEdit, onPassword, onToggle, onDelete, onExport }) {
+function OwnerRow({ owner, onView, onEdit, onPassword, onToggle, onApprove, onReject, onDelete, onExport }) {
   const s = owner.stats || {};
+  const pending = owner.approvalStatus === "pending";
+  const rejected = owner.approvalStatus === "rejected";
+  const unapproved = pending || rejected;
+
+  const pill = pending
+    ? { text: "Pending approval", cls: "bg-amber-100 text-amber-700" }
+    : rejected
+      ? { text: "Rejected", cls: "bg-rose-100 text-rose-600" }
+      : owner.isActive
+        ? { text: "Active", cls: "bg-emerald-100 text-emerald-700" }
+        : { text: "Disabled", cls: "bg-rose-100 text-rose-600" };
 
   return (
-    <li className={`grid gap-4 p-5 lg:grid-cols-12 lg:items-center ${owner.isActive ? "" : "bg-stone-50/70"}`}>
+    <li
+      className={`grid gap-4 p-5 lg:grid-cols-12 lg:items-center ${
+        pending ? "bg-amber-50/60" : owner.isActive && !rejected ? "" : "bg-stone-50/70"
+      }`}
+    >
       <div className="flex min-w-0 items-center gap-3 lg:col-span-4">
         <div
           className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-sm font-bold text-white shadow-md ${
-            owner.isActive ? "bg-gradient-to-br from-violet-600 to-indigo-500" : "bg-stone-400"
+            owner.isActive && !unapproved ? "bg-gradient-to-br from-violet-600 to-indigo-500" : "bg-stone-400"
           }`}
         >
           {initials(owner.name)}
@@ -574,12 +647,8 @@ function OwnerRow({ owner, onView, onEdit, onPassword, onToggle, onDelete, onExp
         <div className="min-w-0">
           <p className="flex items-center gap-2 truncate font-bold text-stone-900">
             {owner.name}
-            <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase ${
-                owner.isActive ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-600"
-              }`}
-            >
-              {owner.isActive ? "Active" : "Disabled"}
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase ${pill.cls}`}>
+              {pill.text}
             </span>
           </p>
           <p className="truncate text-xs text-stone-400">{owner.email}</p>
@@ -602,16 +671,38 @@ function OwnerRow({ owner, onView, onEdit, onPassword, onToggle, onDelete, onExp
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 lg:col-span-2 lg:justify-end">
+        {unapproved && (
+          <button
+            type="button"
+            onClick={onApprove}
+            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-700"
+          >
+            <Check size={14} />
+            {rejected ? "Approve karo" : "Approve"}
+          </button>
+        )}
+        {pending && (
+          <button
+            type="button"
+            onClick={onReject}
+            className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold text-rose-600 ring-1 ring-rose-200 transition hover:bg-rose-50"
+          >
+            <X size={14} />
+            Reject
+          </button>
+        )}
         <IconBtn title="Details" onClick={onView} icon={Eye} />
         <IconBtn title="Edit" onClick={onEdit} icon={Pencil} />
         <IconBtn title="Export PDF" onClick={onExport} icon={Download} />
         <IconBtn title="Reset password" onClick={onPassword} icon={KeyRound} />
-        <IconBtn
-          title={owner.isActive ? "Disable" : "Enable"}
-          onClick={onToggle}
-          icon={Power}
-          cls={owner.isActive ? "text-amber-600 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50"}
-        />
+        {!unapproved && (
+          <IconBtn
+            title={owner.isActive ? "Disable" : "Enable"}
+            onClick={onToggle}
+            icon={Power}
+            cls={owner.isActive ? "text-amber-600 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50"}
+          />
+        )}
         <IconBtn title="Delete" onClick={onDelete} icon={Trash2} cls="text-rose-600 hover:bg-rose-50" />
       </div>
     </li>
@@ -1028,6 +1119,57 @@ function DeleteOwnerModal({ owner, onClose, onDeleted }) {
             className="flex-1 rounded-2xl bg-rose-600 px-4 py-3 text-sm font-bold text-white hover:bg-rose-700 disabled:opacity-40"
           >
             {deleting ? "Deleting..." : "Delete forever"}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+
+function RejectOwnerModal({ owner, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (saving) return;
+
+    try {
+      setSaving(true);
+      await axios.patch(
+        `${API}/owners/${owner._id}/approval`,
+        { decision: "reject", reason: reason.trim() },
+        { withCredentials: true }
+      );
+      toast.success("Owner reject ho gaya");
+      onDone();
+    } catch (error) {
+      toast.error(errMsg(error, "Could not reject owner"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell title={`Reject: ${owner.name}`} onClose={onClose} busy={saving}>
+      <div className="space-y-3">
+        <p className="text-sm text-stone-500">
+          Reject karne par ye owner login nahi kar payega. Wajah likhoge to login par use dikhegi.
+          Baad me chaho to dobara Approve kar sakte ho.
+        </p>
+        <input
+          className={inputCls}
+          placeholder="Wajah (optional)"
+          maxLength={200}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <div className="flex gap-3 pt-2">
+          <button type="button" onClick={onClose} disabled={saving} className="flex-1 rounded-2xl bg-stone-100 px-4 py-3 text-sm font-bold text-stone-700 hover:bg-stone-200 disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="button" onClick={submit} disabled={saving} className="flex-1 rounded-2xl bg-rose-600 px-4 py-3 text-sm font-bold text-white hover:bg-rose-700 disabled:opacity-50">
+            {saving ? "Rejecting..." : "Reject"}
           </button>
         </div>
       </div>

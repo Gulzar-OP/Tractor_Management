@@ -6,6 +6,7 @@ import {
   getOwnerDetails,
   updateOwner,
   setOwnerStatus,
+  decideOwnerApproval,
   resetOwnerPassword,
   deleteOwner,
   exportOwnerData,
@@ -24,6 +25,7 @@ router.get("/owners", listOwners);
 router.get("/owners/:id", getOwnerDetails);
 router.get("/owners/:id/export", exportOwnerData);
 router.patch("/owners/:id", updateOwner);
+router.patch("/owners/:id/approval", decideOwnerApproval);
 router.patch("/owners/:id/status", setOwnerStatus);
 router.post("/owners/:id/reset-password", resetOwnerPassword);
 router.delete("/owners/:id", deleteOwner);

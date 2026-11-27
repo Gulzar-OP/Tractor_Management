@@ -128,12 +128,18 @@ const buildOwnerStats = async (ownerIds) => {
 
 export const getPlatformStats = async (req, res) => {
   try {
-    const [ownerAgg, driverCount, farmerCount, workAgg, paymentCount] =
+    const [ownerAgg, pendingOwners, driverCount, farmerCount, workAgg, paymentCount] =
       await Promise.all([
         User.aggregate([
-          { $match: { role: "owner" } },
+          {
+            $match: {
+              role: "owner",
+              approvalStatus: { $nin: ["pending", "rejected"] },
+            },
+          },
           { $group: { _id: "$isActive", count: { $sum: 1 } } },
         ]),
+        User.countDocuments({ role: "owner", approvalStatus: "pending" }),
         User.countDocuments({ role: "driver" }),
         Farmer.countDocuments({}),
         WorkLog.aggregate([
@@ -158,7 +164,7 @@ export const getPlatformStats = async (req, res) => {
     return res.status(200).json({
       success: true,
       stats: {
-        owners: { total: active + disabled, active, disabled },
+        owners: { total: active + disabled, active, disabled, pending: pendingOwners },
         drivers: driverCount,
         farmers: farmerCount,
         works: w.works || 0,
@@ -187,8 +193,16 @@ export const listOwners = async (req, res) => {
 
     const filter = { role: "owner" };
 
-    if (status === "active") filter.isActive = { $ne: false };
-    if (status === "disabled") filter.isActive = false;
+    if (status === "pending") filter.approvalStatus = "pending";
+    if (status === "rejected") filter.approvalStatus = "rejected";
+    if (status === "active") {
+      filter.isActive = { $ne: false };
+      filter.approvalStatus = { $nin: ["pending", "rejected"] };
+    }
+    if (status === "disabled") {
+      filter.isActive = false;
+      filter.approvalStatus = { $nin: ["pending", "rejected"] };
+    }
 
     if (search) {
       const rx = new RegExp(escapeRegex(search), "i");
@@ -219,6 +233,7 @@ export const listOwners = async (req, res) => {
       owners: owners.map((o) => ({
         ...o,
         isActive: o.isActive !== false,
+        approvalStatus: o.approvalStatus || "approved",
         stats: statsFor(o._id),
       })),
       pagination: {
@@ -349,6 +364,71 @@ export const updateOwner = async (req, res) => {
 };
 
 /* ------------------------------------------------------------------ */
+/* PATCH /api/admin/owners/:id/approval  { decision, reason? }          */
+/* decision: "approve" (pending ya rejected -> approved)                */
+/*           "reject"  (sirf pending ko; chalte account ko Disable karo) */
+/* ------------------------------------------------------------------ */
+
+export const decideOwnerApproval = async (req, res) => {
+  try {
+    const owner = await findOwnerOr404(req.params.id, res);
+    if (!owner) return;
+
+    const decision = String(req.body?.decision || "");
+    const current = owner.approvalStatus || "approved";
+
+    if (decision === "approve") {
+      if (current === "approved") {
+        return fail(res, 400, "Owner is already approved.");
+      }
+
+      owner.approvalStatus = "approved";
+      owner.approvedAt = new Date();
+      owner.approvedBy = req.user.userId;
+      owner.rejectionReason = undefined;
+      await owner.save();
+
+      await audit(req, "APPROVE", owner);
+
+      return res.status(200).json({
+        success: true,
+        message: "Owner approved. Ab wo login kar sakta hai.",
+        approvalStatus: "approved",
+      });
+    }
+
+    if (decision === "reject") {
+      if (current !== "pending") {
+        return fail(
+          res,
+          400,
+          "Only pending owners can be rejected. Use Disable for an active account."
+        );
+      }
+
+      const reason = String(req.body?.reason || "").trim().slice(0, 200);
+
+      owner.approvalStatus = "rejected";
+      owner.rejectionReason = reason || undefined;
+      await owner.save();
+
+      await audit(req, "REJECT", owner, reason ? { reason } : null);
+
+      return res.status(200).json({
+        success: true,
+        message: "Owner rejected.",
+        approvalStatus: "rejected",
+      });
+    }
+
+    return fail(res, 400, 'decision must be "approve" or "reject".');
+  } catch (error) {
+    console.error("decideOwnerApproval error:", error);
+    return fail(res, 500, "Failed to update approval.");
+  }
+};
+
+/* ------------------------------------------------------------------ */
 /* PATCH /api/admin/owners/:id/status  { isActive: true|false }         */
 /* Disable karne par owner aur uske drivers login/use nahi kar paate     */
 /* (protect middleware isActive check karta hai).                       */
@@ -361,6 +441,10 @@ export const setOwnerStatus = async (req, res) => {
 
     if (typeof req.body?.isActive !== "boolean") {
       return fail(res, 400, "isActive (true/false) is required.");
+    }
+
+    if (["pending", "rejected"].includes(owner.approvalStatus)) {
+      return fail(res, 400, "Approve the owner first.");
     }
 
     const next = req.body.isActive;

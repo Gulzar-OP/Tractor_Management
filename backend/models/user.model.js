@@ -38,6 +38,22 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+    },
+
+    approvedAt: Date,
+
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    rejectionReason: String,
     tractorModel: { type: String, trim: true, default: "" },
 tractorNumber: { type: String, trim: true, default: "" },
 currency: { type: String, default: "INR" },
