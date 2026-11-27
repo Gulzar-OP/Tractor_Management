@@ -1,4 +1,3 @@
-
 import React, {
   useCallback,
   useEffect,
@@ -133,6 +132,20 @@ const normalizeVoiceText = (value) =>
     .replace(/[.,!?।॥\-_/\\]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const formatMinutes = (m = 0) => {
+  const total = Math.max(0, Math.round(Number(m) || 0));
+  const h = Math.floor(total / 60);
+  return h > 0 ? `${h}h ${String(total % 60).padStart(2, "0")}m` : `${total}m`;
+};
+
+const liveMinutesOf = (work) => {
+  const base = Number(work?.totalMinutes || 0);
+  if (normalizeStatus(work?.status) !== "RUNNING" || !work?.lastResumeTime) {
+    return base;
+  }
+  return base + Math.max(0, (Date.now() - new Date(work.lastResumeTime).getTime()) / 60000);
+};
 
 const STATUS_STYLES = {
   RUNNING: {
@@ -492,6 +505,10 @@ export default function Works() {
   const [farmers, setFarmers] = useState([]);
   const [workRates, setWorkRates] = useState([]);
   const [activeWork, setActiveWork] = useState(null);
+  // Sirf owner ko: baaki drivers ke chalte / ruke kaam
+  const [otherActive, setOtherActive] = useState([]);
+  // /active fetch fail hua to "No active work" nahi, retry dikhana hai
+  const [activeLoadFailed, setActiveLoadFailed] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -607,36 +624,29 @@ export default function Works() {
 
   /* ---------------- API ---------------- */
 
-  const fetchWorks = useCallback(async () => {
+  // Is user ka apna chalta/ruka kaam (+ owner ke liye baaki drivers ke kaam)
+  const fetchWorks = useCallback(async (silent = false) => {
     try {
-      const res = await axios.get(`${API}/all-works`, {
+      const res = await axios.get(`${API}/active`, {
         withCredentials: true,
       });
 
-      const data =
-        res.data.works ||
-        res.data.data ||
-        res.data.workHistory ||
-        [];
-
-      const works = Array.isArray(data) ? data : [];
-
-      const running = works.find(
-        (w) => normalizeStatus(w.status) === "RUNNING"
+      setActiveWork(res.data?.mine || null);
+      setOtherActive(
+        Array.isArray(res.data?.others) ? res.data.others : []
       );
-
-      const paused = works.find(
-        (w) => normalizeStatus(w.status) === "PAUSED"
-      );
-
-      setActiveWork(running || paused || null);
+      setActiveLoadFailed(false);
     } catch (error) {
       console.error("Fetch active work error:", error);
 
-      toast.error(
-        error.response?.data?.message ||
-          "Failed to fetch current work"
-      );
+      setActiveLoadFailed(true);
+
+      if (!silent) {
+        toast.error(
+          error.response?.data?.message ||
+            "Failed to fetch current work"
+        );
+      }
     }
   }, []);
 
@@ -701,6 +711,14 @@ export default function Works() {
 
     load();
   }, [fetchWorks, fetchFarmers, fetchWorkRates]);
+
+  // Owner ko drivers ki list taazi rakhne ke liye 30 second me chup-chaap refresh
+  useEffect(() => {
+    if (!otherActive.length) return undefined;
+
+    const id = setInterval(() => fetchWorks(true), 30000);
+    return () => clearInterval(id);
+  }, [otherActive.length, fetchWorks]);
 
   /* ---------------- Voice Input ---------------- */
 
@@ -950,6 +968,11 @@ export default function Works() {
     } catch (error) {
       console.error("Start work error:", error);
 
+      // Server ke hisaab se kaam pehle se chal raha ho to sahi state le aao
+      if (error.response?.status === 409) {
+        await fetchWorks(true);
+      }
+
       toast.error(
         error.response?.data?.message ||
           "Failed to start work"
@@ -991,6 +1014,10 @@ export default function Works() {
       }
     } catch (error) {
       console.error(`${path} work error:`, error);
+
+      if ([403, 404, 409].includes(error.response?.status)) {
+        await fetchWorks(true);
+      }
 
       toast.error(
         error.response?.data?.message || errorMsg
@@ -1112,9 +1139,82 @@ export default function Works() {
           </button>
         </header>
 
+        {/* Owner: baaki drivers abhi kya kar rahe hain */}
+
+        {otherActive.length > 0 && (
+          <section className="rounded-[2rem] bg-white p-5 shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-stone-400">
+              Abhi kaam par ({otherActive.length})
+            </h2>
+
+            <ul className="mt-3 grid gap-3 md:grid-cols-2">
+              {otherActive.map((w) => {
+                const running = normalizeStatus(w.status) === "RUNNING";
+
+                return (
+                  <li
+                    key={w._id}
+                    className="flex items-center justify-between gap-3 rounded-2xl bg-stone-50 p-4"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-stone-800">
+                        {w.createdBy?.name || "Driver"}
+                      </p>
+                      <p className="truncate text-xs text-stone-500">
+                        {getFarmerName(w.farmer)} · {w.workType || getRateName(w.workRate) || "-"}
+                      </p>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${
+                          running
+                            ? STATUS_STYLES.RUNNING.pill.replace("text-emerald-300", "text-emerald-700").replace("bg-emerald-400/15", "bg-emerald-50")
+                            : STATUS_STYLES.PAUSED.pill.replace("text-amber-300", "text-amber-700").replace("bg-amber-400/15", "bg-amber-50")
+                        }`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            running ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+                          }`}
+                        />
+                        {running ? "Running" : "Paused"}
+                      </span>
+                      <p className="mt-1 text-xs font-semibold tabular-nums text-stone-600">
+                        {formatMinutes(liveMinutesOf(w))}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
         {/* ================= ACTIVE WORK ================= */}
 
-        {activeWork ? (
+        {activeLoadFailed && !activeWork ? (
+          <div className="rounded-[2rem] bg-white p-10 text-center shadow-lg shadow-stone-900/5 ring-1 ring-stone-900/5">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">
+              <AlertCircle size={26} />
+            </div>
+            <p className="mt-4 font-bold text-stone-800">
+              Current kaam load nahi ho paya
+            </p>
+            <p className="mt-1 text-sm text-stone-500">
+              Net ya server ki dikkat ho sakti hai. Naya kaam shuru karne se pehle
+              dobara try karo, kyunki ho sakta hai aapka timer chal raha ho.
+            </p>
+            <button
+              type="button"
+              onClick={() => fetchWorks()}
+              className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-stone-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-stone-700"
+            >
+              <RefreshCw size={15} />
+              Retry
+            </button>
+          </div>
+        ) : activeWork ? (
           <div className="grid gap-6 lg:grid-cols-5">
 
             {/* Timer card */}

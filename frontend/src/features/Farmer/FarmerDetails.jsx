@@ -98,7 +98,8 @@ const getLocalDateBoundary = (date, end = false) => {
 };
 
 const formatWorkTime = (totalMinutes = 0) => {
-  const minutes = Math.max(0, Number(totalMinutes || 0));
+  // Minutes decimal me store hote hain (109.21), dikhane se pehle poore minute me round
+  const minutes = Math.round(Math.max(0, Number(totalMinutes || 0)));
 
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
@@ -414,9 +415,8 @@ export default function FarmerDetails() {
   );
 
   // Total accumulated work minutes
-  const totalWorkMinutes = Math.max(
-    0,
-    Number(farmer?.totalWorkMinutes || 0)
+  const totalWorkMinutes = Math.round(
+    Math.max(0, Number(farmer?.totalWorkMinutes || 0))
   );
 
   const totalWorkHours = Math.floor(
@@ -541,10 +541,12 @@ export default function FarmerDetails() {
 
   // Total minutes for currently filtered work records
   const filteredTotalMinutes = useMemo(() => {
-    return filteredWorks.reduce(
-      (sum, work) =>
-        sum + Math.max(0, Number(work?.totalMinutes || 0)),
-      0
+    return Math.round(
+      filteredWorks.reduce(
+        (sum, work) =>
+          sum + Math.max(0, Number(work?.totalMinutes || 0)),
+        0
+      )
     );
   }, [filteredWorks]);
 
@@ -1231,7 +1233,7 @@ export default function FarmerDetails() {
 
                             <span className="inline-flex items-center gap-1">
                               <Clock size={12} />
-                              {Number(work.totalMinutes || 0)} min
+                              {formatWorkTime(work.totalMinutes)}
                             </span>
 
                             <span className="inline-flex items-center gap-1">

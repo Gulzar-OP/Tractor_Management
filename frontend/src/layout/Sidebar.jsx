@@ -20,6 +20,7 @@ import {
   X,
   Megaphone,
   BookOpen,
+  ShieldCheck,
 } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { getCurrentUser, logoutUser } from "../redux/slice/authSlice";
@@ -83,6 +84,7 @@ const ADMIN_NAV =[
   path: "/manage-updates",
   icon: Megaphone,
 },
+ { label: "Owners", path: "/admin", icon: ShieldCheck, end: true },
 { 
   label: "What's New",
   path: "/changelog",

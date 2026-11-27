@@ -1,4 +1,3 @@
-
 import mongoose from "mongoose";
 
 import Farmer from "../models/farmer.model.js";
@@ -149,6 +148,15 @@ const getWork = async (req, session = null) => {
 
   if (!work) {
     throw httpError("Work not found", 404);
+  }
+
+  // Driver sirf apna shuru kiya hua kaam pause/resume/stop/cancel kar sakta hai.
+  // Owner apne owner ke kisi bhi kaam par kaam kar sakta hai.
+  if (
+    req.user.role === "driver" &&
+    String(work.createdBy) !== String(req.user.userId)
+  ) {
+    throw httpError("You can only manage your own work", 403);
   }
 
   return work;
@@ -314,6 +322,23 @@ export const startWork = async (req, res) => {
     let createdWork;
 
     await session.withTransaction(async () => {
+      // Ek user ka ek hi chalta ya ruka hua kaam (double tap / 2 tab se bachav)
+      const alreadyActive = await WorkLog.findOne({
+        owner,
+        createdBy: req.user.userId,
+        status: { $in: ["RUNNING", "PAUSED"] },
+      })
+        .select("_id status")
+        .session(session)
+        .lean();
+
+      if (alreadyActive) {
+        throw httpError(
+          `You already have a ${alreadyActive.status.toLowerCase()} work. Complete or cancel it first.`,
+          409
+        );
+      }
+
       const now = new Date();
 
       const [work] = await WorkLog.create(
@@ -756,9 +781,23 @@ export const stopWork = async (req, res) => {
 // GET ALL WORKS
 // =====================================================
 
+// Pehle jaisa hi chalta hai (sab works). Naya: ?limit=&page=&status= bhejne par
+// sirf utna aata hai, aur response me pagination bhi.
 export const getAllWorks = async (req, res) => {
   try {
-    const works = await WorkLog.find(scopeFilter(req))
+    const filter = scopeFilter(req);
+
+    const status = String(req.query.status || "").toUpperCase();
+    if (["RUNNING", "PAUSED", "STOPPED", "CANCELLED"].includes(status)) {
+      filter.status = status;
+    }
+
+    const limit = parseInt(req.query.limit, 10);
+    const paginated = Number.isFinite(limit) && limit > 0;
+    const pageSize = paginated ? Math.min(limit, 200) : 0;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    let query = WorkLog.find(filter)
       .populate({
         path: "farmer",
         select: "name phone village",
@@ -767,15 +806,77 @@ export const getAllWorks = async (req, res) => {
         path: "workRate",
         select: "type rate unit",
       })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (paginated) {
+      query = query.skip((page - 1) * pageSize).limit(pageSize);
+    }
+
+    const [works, total] = await Promise.all([
+      query,
+      paginated ? WorkLog.countDocuments(filter) : Promise.resolve(null),
+    ]);
 
     return res.status(200).json({
       success: true,
       count: works.length,
       works,
+      ...(paginated && {
+        pagination: {
+          page,
+          limit: pageSize,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / pageSize)),
+        },
+      }),
     });
   } catch (err) {
     return handleError(res, err, "getAllWorks");
+  }
+};
+
+// =====================================================
+// GET ACTIVE WORKS  (GET /api/work/active)
+// =====================================================
+
+// mine   : is user ka apna RUNNING/PAUSED kaam (timer wala page isi ko dikhata hai)
+// others : sirf owner ko: baaki drivers ke chalte/ruke kaam ("abhi kaun kaam par hai")
+export const getActiveWorks = async (req, res) => {
+  try {
+    const base = {
+      ...scopeFilter(req),
+      status: { $in: ["RUNNING", "PAUSED"] },
+    };
+
+    const populate = [
+      { path: "farmer", select: "name phone village" },
+      { path: "workRate", select: "type rate unit" },
+    ];
+
+    const [mine, others] = await Promise.all([
+      WorkLog.findOne({ ...base, createdBy: req.user.userId })
+        .populate(populate)
+        .sort({ createdAt: -1 })
+        .lean(),
+
+      req.user.role === "owner"
+        ? WorkLog.find({ ...base, createdBy: { $ne: req.user.userId } })
+            .populate(populate)
+            .populate({ path: "createdBy", select: "name" })
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      mine: mine || null,
+      others,
+    });
+  } catch (err) {
+    return handleError(res, err, "getActiveWorks");
   }
 };
 
@@ -1272,11 +1373,6 @@ export const cancelWork = async (req, res) => {
       work.endTime = now;
       work.lastResumeTime = null;
       work.status = "CANCELLED";
-
-      // Important:
-      // Do not calculate totalAmount.
-      // Do not apply farmer advance.
-      // Do not modify payment or accounting records.
 
       await work.save({ session });
 

@@ -31,6 +31,7 @@ import Changelog from "./page/Changelog/Changelog";
 import ManageAnnouncements from "./page/Changelog/ManageAnnouncements";
 import ProtectedRoute from "./components/ProtectedRoute.jsx"
 import HelpCenter from "./features/HelpCenter/HelpCenter";
+import AdminOwners from "./admin/Admin.jsx";
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -94,6 +95,7 @@ export default function App() {
                       </ProtectedRoute>
                     }
                   />
+                  <Route path="/admin" element={<AdminOwners />}/>
                   <Route path="/help" element={<HelpCenter />} />
                   {/* <Route
   path="/help"

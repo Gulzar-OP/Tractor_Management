@@ -6,6 +6,7 @@ import {
   resumeWork,
   stopWork,
   getAllWorks,
+  getActiveWorks,
   workDetails,
   updateWork,
   deleteWork,
@@ -20,6 +21,8 @@ const router = express.Router();
 router.post("/start", protect, startWork);
 router.post("/add", protect, addWork);
 router.get("/all-works", protect, getAllWorks);
+// Specific route "/:id" wale routes se pehle rakho
+router.get("/active", protect, getActiveWorks);
 
 router.get("/details/:id", protect, workDetails);
 
