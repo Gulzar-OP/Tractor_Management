@@ -21,15 +21,15 @@ const app = express();
 app.use(express.json());
 
 const port = process.env.PORT || 4000;
+app.set("trust proxy", 1); // Render/Heroku jaise proxy ke peeche sahi client IP
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
 // Parse cookies
 app.use(cookieParser());
 const allowURL = [
   "http://localhost:5173",
   "http://localhost:5174",
-  process.env.API_Frontend
-];
+  process.env.API_Frontend,
+].filter(Boolean);
 
 app.use(cors({
     origin: allowURL,

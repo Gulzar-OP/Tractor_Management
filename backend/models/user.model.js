@@ -30,6 +30,10 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Password badalne par isse purane tokens invalid ho jate hain
+    passwordChangedAt: { type: Date, default: null },
+    resetPasswordTokenHash: { type: String, default: null, select: false },
+    resetPasswordExpires: { type: Date, default: null, select: false },
     phone: String,
 
     village: String,

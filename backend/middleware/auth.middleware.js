@@ -59,11 +59,20 @@ export const protect = async (req, res, next) => {
     // Token ke bharose mat raho: user abhi bhi exist karta hai,
     // active hai, aur role/owner DB ke hisaab se kya hai.
     const user = await User.findById(userId)
-      .select("role owner isActive approvalStatus")
+      .select("role owner isActive approvalStatus passwordChangedAt")
       .lean();
 
     if (!user || user.isActive === false) {
       return unauthorized(res, "Account not found or disabled");
+    }
+
+    // Password badalne ke baad ka purana token (iat second me hota hai)
+    if (
+      user.passwordChangedAt &&
+      (decoded.iat || 0) * 1000 < new Date(user.passwordChangedAt).getTime()
+    ) {
+      res.clearCookie("authToken", cookieOptions);
+      return unauthorized(res, "Password changed - please login again");
     }
 
     if (
