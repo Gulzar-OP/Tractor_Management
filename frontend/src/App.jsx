@@ -20,6 +20,8 @@ import { useState } from "react";
 import FarmerDetails from "./features/Farmer/FarmerDetails";
 import Login from "./auth/Login"
 import Register from "./auth/Register";
+import ForgotPassword from "./auth/ForgotPassword";
+import ResetPassword from "./auth/ResetPassword";
 // import Auth from "./auth/Auth";
 // import DriverLogin from './auth/DriverLogin'
 import Drivers from "./features/drivers/Drivers";
@@ -41,6 +43,8 @@ export default function App() {
       <Route path="/home" element={<Intro />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password/:token" element={<ResetPassword />} />
       {/* <Route path="/auth" element={<Auth />} /> */}
       {/* <Route path="/login/driver" element={<DriverLogin />} /> */}
 
@@ -81,7 +85,7 @@ export default function App() {
                   <Route
                     path="/manage-updates"
                     element={
-                      <ProtectedRoute allowedRoles={["owner", "admin"]}>
+                      <ProtectedRoute allowedRoles={["admin"]}>
                         <ManageAnnouncements />
                       </ProtectedRoute>
                     }
@@ -95,7 +99,14 @@ export default function App() {
                       </ProtectedRoute>
                     }
                   />
-                  <Route path="/admin" element={<AdminOwners />}/>
+                  <Route
+                    path="/admin"
+                    element={
+                      <ProtectedRoute allowedRoles={["admin"]}>
+                        <AdminOwners />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route path="/help" element={<HelpCenter />} />
                   {/* <Route
   path="/help"

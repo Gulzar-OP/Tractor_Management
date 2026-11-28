@@ -198,6 +198,14 @@ export default function Login() {
                     {showPassword ? <FaEyeSlash /> : <FaEye />}
                   </button>
                 </div>
+                <div className="mt-2 text-right">
+                  <Link
+                    to="/forgot-password"
+                    className="text-sm font-medium text-green-600 hover:text-green-700 hover:underline"
+                  >
+                    Password bhool gaye?
+                  </Link>
+                </div>
               </div>
 
               {/* Error */}
