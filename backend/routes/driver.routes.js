@@ -6,7 +6,6 @@ import {
   updateDriver,
   deleteDriver,
   me,
-  getDriver,
 } from "../controllers/driver.controller.js";
 
 import { protect,isOwner } from "../middleware/auth.middleware.js";
@@ -25,6 +24,5 @@ router.put("/:id", protect, isOwner, updateDriver);
 
 router.delete("/:id", protect, isOwner, deleteDriver);
 
-router.get("/driver/:_id", protect, getDriver);
 
 export default router;

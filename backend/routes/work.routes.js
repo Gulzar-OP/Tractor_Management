@@ -31,7 +31,7 @@ router.post("/:id/resume", protect, resumeWork);
 router.post("/:id/stop", protect, stopWork);
 // Work delete sirf owner kar sakta hai (driver sirf cancel kar sakta hai)
 router.delete("/:id", protect, isOwner, deleteWork);
-router.put("/:id", protect, updateWork);
+router.put("/:id", protect, isOwner, updateWork);
 router.post("/:id/cancel", protect, cancelWork);
 
 router.get("/due-summary", protect, dueSummary);

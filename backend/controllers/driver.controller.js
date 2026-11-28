@@ -163,6 +163,7 @@ export const updateDriver = async (req, res) => {
       }
 
       updates.password = await bcrypt.hash(password, 10);
+      updates.passwordChangedAt = new Date();
     }
 
     if (Object.keys(updates).length === 0) {

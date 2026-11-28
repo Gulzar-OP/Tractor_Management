@@ -11,7 +11,7 @@ import {
   deleteAnnouncement,
 } from "../controllers/announcement.controller.js";
 
-import { protect, isOwner, canManageUpdates } from "../middleware/auth.middleware.js";
+import { protect, isAdmin } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
@@ -20,33 +20,33 @@ router.get("/", protect, getAllAnnouncements);
 router.get("/:id", protect, getAnnouncementById);
 
 // Owner + Admin routes
-router.post("/", protect, canManageUpdates, createAnnouncement);
+router.post("/", protect, isAdmin, createAnnouncement);
 
 router.get(
   "/admin/all",
   protect,
-  canManageUpdates,
+  isAdmin,
   getAdminAnnouncements
 );
 
 router.put(
   "/:id",
   protect,
-  canManageUpdates,
+  isAdmin,
   updateAnnouncement
 );
 
 router.patch(
   "/:id/publish",
   protect,
-  canManageUpdates,
+  isAdmin,
   toggleAnnouncementPublish
 );
 
 router.delete(
   "/:id",
   protect,
-  canManageUpdates,
+  isAdmin,
   deleteAnnouncement
 );
 

@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 
 import User from "../models/user.model.js";
 import Farmer from "../models/farmer.model.js";
@@ -490,6 +490,7 @@ export const resetOwnerPassword = async (req, res) => {
     }
 
     owner.password = await bcrypt.hash(newPassword, 10);
+    owner.passwordChangedAt = new Date();
     await owner.save();
 
     // Password audit me kabhi save nahi karte
